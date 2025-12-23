@@ -112,8 +112,7 @@ impl NasmEmitter {
         
         // BIOS bootloader header
         code.push_str("; ============================================\n");
-        code.push_str("; Rython BIOS Bootloader\n");
-        code.push_str("; Generated from Rython AST\n");
+        code.push_str("; Starting RF");
         code.push_str("; ============================================\n\n");
         
         code.push_str("    org 0x7C00\n");
