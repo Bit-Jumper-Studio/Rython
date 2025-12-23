@@ -13,3 +13,5 @@ target
 dist
 build_py
 __pycache__
+
+tests
