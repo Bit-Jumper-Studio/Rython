@@ -4,13 +4,8 @@ fn main() {
     // Get the target triple
     let target = std::env::var("TARGET").unwrap();
     
-    // Handle MinGW-specific linking
+    // Handle MinGW-specific linking (Windows)
     if target.contains("windows-gnu") {
-        // REMOVED: Don't set built-in cfg flags
-        // println!("cargo:rustc-cfg=target_os=\"windows\"");
-        // println!("cargo:rustc-cfg=target_env=\"gnu\"");
-        
-        // Instead, set a custom cfg flag
         println!("cargo:rustc-cfg=mingw_build");
         
         // Set linker flags for MinGW
@@ -21,8 +16,36 @@ fn main() {
         println!("cargo:rustc-link-arg=-lgcc");
         println!("cargo:rustc-link-arg=-Wl,-Bstatic");
         println!("cargo:rustc-link-arg=-Wl,--gc-sections");
-        
-        // Prevent Rust from adding problematic MSVC flags
         println!("cargo:rustc-link-arg=-Wl,--allow-multiple-definition");
+    }
+    // Handle Linux-specific linking
+    else if target.contains("linux") {
+        println!("cargo:rustc-cfg=linux_build");
+        
+        // Set linker flags for Linux
+        println!("cargo:rustc-link-arg=-Wl,--gc-sections");
+        
+        // Optional: Add runtime library if needed
+        // println!("cargo:rustc-link-arg=-lrt");
+        // println!("cargo:rustc-link-arg=-ldl");
+    }
+    // Handle macOS-specific linking
+    else if target.contains("darwin") || target.contains("apple") {
+        println!("cargo:rustc-cfg=macos_build");
+        
+        // macOS linker flags
+        println!("cargo:rustc-link-arg=-Wl,-dead_strip");
+    }
+    // Handle other Unix-like systems
+    else if target.contains("bsd") || target.contains("solaris") {
+        println!("cargo:rustc-cfg=unix_build");
+        
+        // Generic Unix linker flags
+        println!("cargo:rustc-link-arg=-Wl,--gc-sections");
+    }
+    // Handle unknown targets with generic settings
+    else {
+        println!("cargo:warning=Building for unknown target: {}", target);
+        println!("cargo:rustc-cfg=generic_build");
     }
 }

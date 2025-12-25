@@ -1,6 +1,3 @@
-// src/utils.rs
-//! Shared utility functions for the Rython compiler
-
 use std::path::Path;
 
 /// Find the NASM executable, checking local bin folder first

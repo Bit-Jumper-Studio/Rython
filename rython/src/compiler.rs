@@ -1,8 +1,8 @@
-// src/compiler.rs - Fixed naming conventions
-//! Rython Compiler - Now with bit jumper system
+// ==================== COMPILER ====================
 
 use std::fs;
 use std::process::Command;
+use crate::backend::{BackendRegistry, Backend, Bios64Backend, Linux64Backend, BackendModule, Capability};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Target {
@@ -21,6 +21,7 @@ pub struct CompilerConfig {
     pub target: Target,
     pub verbose: bool,
     pub keep_assembly: bool,
+    pub optimize: bool,
 }
 
 impl Default for CompilerConfig {
@@ -29,44 +30,42 @@ impl Default for CompilerConfig {
             target: Target::Bios64,
             verbose: false,
             keep_assembly: false,
+            optimize: true,
         }
     }
 }
 
 pub struct RythonCompiler {
     config: CompilerConfig,
-    nasm_emitter: crate::emitter::NasmEmitter,
+    backend_registry: BackendRegistry,
 }
 
 impl RythonCompiler {
     pub fn new(config: CompilerConfig) -> Self {
         Self {
             config,
-            nasm_emitter: crate::emitter::NasmEmitter::new(),
+            backend_registry: BackendRegistry::default_registry(),
         }
     }
- 
     
     /// Main compilation entry point
     pub fn compile(&mut self, source: &str, output_path: &str) -> Result<(), String> {
-        // Parse source code
+        // 1. Parse source code
         let program = crate::parser::parse_program(source)
             .map_err(|e| format!("Parse error: {}", e))?;
         
-        // Set target on emitter
-        match self.config.target {
-            Target::Bios16 => self.nasm_emitter.set_target_bios16(),
-            Target::Bios32 => self.nasm_emitter.set_target_bios32(),
-            Target::Bios64 => self.nasm_emitter.set_target_bios64(),
-            Target::Bios64Sse => self.nasm_emitter.set_target_bios64_sse(),
-            Target::Bios64Avx => self.nasm_emitter.set_target_bios64_avx(),
-            Target::Bios64Avx512 => self.nasm_emitter.set_target_bios64_avx512(),
-            Target::Linux64 => self.nasm_emitter.set_target_linux(),
-            Target::Windows64 => self.nasm_emitter.set_target_windows(),
+        if self.config.verbose {
+            println!("[Rython] Parsed AST successfully");
         }
         
-        // Generate assembly using the emitter
-        let asm = self.nasm_emitter.compile_program(&program);
+        // 2. Create backend module
+        let module = self.create_backend_module(&program)?;
+        
+        // 3. Select backend based on target and capabilities
+        let mut backend = self.select_backend(&module)?;
+        
+        // 4. Generate assembly
+        let asm = backend.compile_program(&program)?;
         
         if self.config.verbose {
             println!("[Rython] Generated assembly (first 50 lines):");
@@ -77,11 +76,11 @@ impl RythonCompiler {
         
         let asm_file = format!("{}.asm", output_path);
         
-        // Write assembly
+        // 5. Write assembly
         fs::write(&asm_file, &asm)
             .map_err(|e| format!("Failed to write assembly: {}", e))?;
         
-        // Assemble based on target
+        // 6. Assemble based on target
         match self.config.target {
             Target::Bios16 | Target::Bios32 | Target::Bios64 | 
             Target::Bios64Sse | Target::Bios64Avx | Target::Bios64Avx512 => 
@@ -98,7 +97,99 @@ impl RythonCompiler {
         Ok(())
     }
     
-    fn assemble_bios(&self, asm_file: &str, output_path: &str) -> Result<(), String> {
+    fn create_backend_module(&self, _program: &crate::parser::Program) -> Result<BackendModule, String> {
+        // Create a simple module with required capabilities
+        let mut required_capabilities = Vec::new();
+        
+        match self.config.target {
+            Target::Bios16 => {
+                required_capabilities.push(Capability::BIOS);
+                required_capabilities.push(Capability::RealMode16);
+            }
+            Target::Bios32 => {
+                required_capabilities.push(Capability::BIOS);
+                required_capabilities.push(Capability::ProtectedMode32);
+            }
+            Target::Bios64 => {
+                required_capabilities.push(Capability::BIOS);
+                required_capabilities.push(Capability::LongMode64);
+            }
+            Target::Bios64Sse => {
+                required_capabilities.push(Capability::BIOS);
+                required_capabilities.push(Capability::LongMode64);
+                required_capabilities.push(Capability::SSE);
+                required_capabilities.push(Capability::SSE2);
+            }
+            Target::Bios64Avx => {
+                required_capabilities.push(Capability::BIOS);
+                required_capabilities.push(Capability::LongMode64);
+                required_capabilities.push(Capability::AVX);
+            }
+            Target::Bios64Avx512 => {
+                required_capabilities.push(Capability::BIOS);
+                required_capabilities.push(Capability::LongMode64);
+                required_capabilities.push(Capability::AVX512);
+            }
+            Target::Linux64 => {
+                required_capabilities.push(Capability::Linux);
+                required_capabilities.push(Capability::LongMode64);
+            }
+            Target::Windows64 => {
+                required_capabilities.push(Capability::Windows);
+                required_capabilities.push(Capability::LongMode64);
+            }
+        }
+        
+        Ok(BackendModule {
+            functions: Vec::new(),
+            globals: Vec::new(),
+            required_capabilities,
+        })
+    }
+    
+    fn select_backend(&self, module: &BackendModule) -> Result<Box<dyn Backend>, String> {
+        // Find compatible backend
+        for backend in &self.backend_registry.backends {
+            if backend.can_compile(module) {
+                // Create a mutable clone for compilation
+                match backend.name() {
+                    "bios64" => {
+                        let mut bios_backend = Bios64Backend::new();
+                        
+                        // Enable extensions if requested
+                        if module.required_capabilities.contains(&Capability::SSE) {
+                            bios_backend = bios_backend.with_sse();
+                        }
+                        if module.required_capabilities.contains(&Capability::AVX) {
+                            bios_backend = bios_backend.with_avx();
+                        }
+                        
+                        return Ok(Box::new(bios_backend));
+                    }
+                    "linux64" => return Ok(Box::new(Linux64Backend::new())),
+                    _ => continue,
+                }
+            }
+        }
+        
+        // No compatible backend found
+        let required: Vec<String> = module.required_capabilities.iter()
+            .map(|c| format!("{:?}", c))
+            .collect();
+        
+        let available: Vec<String> = self.backend_registry.backends.iter()
+            .map(|b| b.name().to_string())
+            .collect();
+        
+        Err(format!(
+            "No backend supports all required capabilities: {:?}\n\
+             Available backends: {}",
+            required,
+            available.join(", ")
+        ))
+    }
+    
+    pub(crate) fn assemble_bios(&self, asm_file: &str, output_path: &str) -> Result<(), String> {
         let nasm = crate::utils::find_nasm();
         
         Command::new(&nasm)
@@ -118,7 +209,7 @@ impl RythonCompiler {
             })
     }
     
-    fn assemble_linux(&self, asm_file: &str, output_path: &str) -> Result<(), String> {
+    pub(crate) fn assemble_linux(&self, asm_file: &str, output_path: &str) -> Result<(), String> {
         let nasm = crate::utils::find_nasm();
         let obj_file = format!("{}.o", output_path);
         
@@ -159,7 +250,7 @@ impl RythonCompiler {
         }
     }
     
-    fn assemble_windows(&self, asm_file: &str, output_path: &str) -> Result<(), String> {
+    pub(crate) fn assemble_windows(&self, asm_file: &str, output_path: &str) -> Result<(), String> {
         let nasm = crate::utils::find_nasm();
         let obj_file = format!("{}.obj", output_path);
         
@@ -215,6 +306,7 @@ pub fn compile_to_bios16(source: &str, output_path: &str) -> Result<(), String> 
         target: Target::Bios16,
         verbose: true,
         keep_assembly: true,
+        ..Default::default()
     };
     
     let mut compiler = RythonCompiler::new(config);
@@ -226,6 +318,7 @@ pub fn compile_to_bios32(source: &str, output_path: &str) -> Result<(), String> 
         target: Target::Bios32,
         verbose: true,
         keep_assembly: true,
+        ..Default::default()
     };
     
     let mut compiler = RythonCompiler::new(config);
@@ -237,6 +330,7 @@ pub fn compile_to_bios64(source: &str, output_path: &str) -> Result<(), String> 
         target: Target::Bios64,
         verbose: true,
         keep_assembly: true,
+        ..Default::default()
     };
     
     let mut compiler = RythonCompiler::new(config);
@@ -248,6 +342,7 @@ pub fn compile_to_bios64_sse(source: &str, output_path: &str) -> Result<(), Stri
         target: Target::Bios64Sse,
         verbose: true,
         keep_assembly: true,
+        ..Default::default()
     };
     
     let mut compiler = RythonCompiler::new(config);
@@ -259,6 +354,7 @@ pub fn compile_to_bios64_avx(source: &str, output_path: &str) -> Result<(), Stri
         target: Target::Bios64Avx,
         verbose: true,
         keep_assembly: true,
+        ..Default::default()
     };
     
     let mut compiler = RythonCompiler::new(config);
@@ -270,6 +366,7 @@ pub fn compile_to_bios64_avx512(source: &str, output_path: &str) -> Result<(), S
         target: Target::Bios64Avx512,
         verbose: true,
         keep_assembly: true,
+        ..Default::default()
     };
     
     let mut compiler = RythonCompiler::new(config);
@@ -307,20 +404,9 @@ pub fn compile_to_bootloader(source_code: &str) -> Result<Vec<u8>, String> {
     
     let mut compiler = RythonCompiler::new(config);
     
-    // Parse the source code
-    let program = crate::parser::parse_program(source_code)
-        .map_err(|e| format!("Parse error: {}", e))?;
-    
     // Create temporary file
     let temp_file = "temp_boot.bin";
-    compiler.nasm_emitter.set_target_bios64();
-    let asm = compiler.nasm_emitter.compile_program(&program);
-    
-    let asm_file = format!("{}.asm", temp_file);
-    fs::write(&asm_file, &asm)
-        .map_err(|e| format!("Failed to write assembly: {}", e))?;
-    
-    compiler.assemble_bios(&asm_file, temp_file)?;
+    compiler.compile(source_code, temp_file)?;
     
     // Read binary back
     let binary = fs::read(temp_file)
@@ -328,7 +414,6 @@ pub fn compile_to_bootloader(source_code: &str) -> Result<Vec<u8>, String> {
     
     // Clean up
     fs::remove_file(temp_file).ok();
-    fs::remove_file(&asm_file).ok();
     
     Ok(binary)
 }

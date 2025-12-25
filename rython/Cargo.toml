@@ -1,25 +1,27 @@
 [package]
 name = "rython"
-version = "0.0.1-alpha"
+version = "0.0.1"
+description = ""
+authors = ["Emanuel"]
+license = "MIT"
+repository = "https://github.com//rython"
+readme = "README.md"
+keywords = ["compiler", "bootloader", "assembly", "bios", "uefi", "low-level"]
+categories = ["command-line-utilities", "development-tools", "systems-programming"]
 edition = "2021"
-build = "build.rs"
 
 [dependencies]
-pest = "2.7"
-pest_derive = "2.7"
-pest_consume = "1.1"
-anyhow = "1.0"
-thiserror = "1.0"
-toml = "0.8"
-serde = { version = "1.0", features = ["derive"] }
-colored = "2.0"
 clap = { version = "4.0", features = ["derive"] }
+colored = "2.0"
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-[lib]
-name = "rython"
-crate-type = ["rlib"]
+# Remove the [features] section entirely since we don't need conditional compilation
+# Or keep it simple if you really want features:
 
-[[bin]]
-name = "rythonc"
-path = "src/main.rs"
+[features]
+default = ["bios"]
+bios = []
+sse = []
+avx = []
+avx512 = []

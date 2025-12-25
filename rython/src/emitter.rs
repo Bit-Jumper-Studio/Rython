@@ -1,6 +1,3 @@
-// src/emitter.rs - Complete fixed version
-//! NASM Assembly Emitter for Rython AST - With Mode Transitions
-
 use crate::parser::{Program, Statement, Expr};
 use std::collections::HashMap;
 
@@ -48,7 +45,7 @@ impl TargetConfig {
 // ========== NASM EMITTER ==========
 
 pub struct NasmEmitter {
-    target: TargetConfig,
+    pub target: TargetConfig,
     label_counter: u32,
     variable_offsets: HashMap<String, i32>,
 }
@@ -72,15 +69,85 @@ impl NasmEmitter {
     pub fn set_target_bios64_avx(&mut self) { self.target = TargetConfig::bios64_avx(); }
     pub fn set_target_bios64_avx512(&mut self) { self.target = TargetConfig::bios64_avx512(); }
     
+    // Check if program has imports
+    fn has_imports(&self, program: &Program) -> bool {
+        program.body.iter().any(|stmt| {
+            match stmt {
+                Statement::Expr(Expr::Call { func, .. }) => func == "import",
+                _ => false,
+            }
+        })
+    }
+    
+    // Process imports and return filtered program and library assembly
+    fn process_imports(&self, program: &Program) -> Result<(Program, String), String> {
+        use crate::rcl_compiler::AutoImportResolver;
+        
+        let target_str = match self.target.platform {
+            TargetPlatform::Bios16 => "bios16",
+            TargetPlatform::Bios32 => "bios32",
+            TargetPlatform::Bios64 | TargetPlatform::Bios64SSE | 
+            TargetPlatform::Bios64AVX | TargetPlatform::Bios64AVX512 => "bios64",
+            TargetPlatform::Linux64 => "linux64",
+            TargetPlatform::Windows64 => "windows64",
+        };
+        
+        let mut resolver = AutoImportResolver::new();
+        
+        // Generate library assembly
+        let library_asm = resolver.generate_import_assembly(program, target_str)
+            .map_err(|e| format!("Import error: {}", e))?;
+        
+        // Get program without imports
+        let filtered_program = resolver.create_program_without_imports(program);
+        
+        Ok((filtered_program, library_asm))
+    }
+    
     // Main compilation
     pub fn compile_program(&mut self, program: &Program) -> String {
         self.label_counter = 0;
         self.variable_offsets.clear();
         
+        // Check for imports first
+        if self.has_imports(program) {
+            return self.compile_with_imports(program);
+        }
+        
         if self.target.is_bios() {
             self.compile_bios(program)
         } else {
             self.compile_standard(program)
+        }
+    }
+    
+    // Compile with automatic import handling
+    fn compile_with_imports(&mut self, program: &Program) -> String {
+        match self.process_imports(program) {
+            Ok((filtered_program, library_asm)) => {
+                // Compile main program
+                let main_asm = if self.target.is_bios() {
+                    self.compile_bios(&filtered_program)
+                } else {
+                    self.compile_standard(&filtered_program)
+                };
+                
+                // Combine with library assembly
+                if !library_asm.is_empty() {
+                    format!("{}\n\n; ========== IMPORTED LIBRARIES ==========\n\n{}", main_asm, library_asm)
+                } else {
+                    main_asm
+                }
+            }
+            Err(e) => {
+                // Fall back to compilation without imports
+                format!("; Warning: Failed to process imports: {}\n\n{}", e, 
+                    if self.target.is_bios() {
+                        self.compile_bios(program)
+                    } else {
+                        self.compile_standard(program)
+                    })
+            }
         }
     }
     
@@ -94,11 +161,13 @@ impl NasmEmitter {
             TargetPlatform::Bios64SSE => self.compile_bios64_sse(&mut code, program),
             TargetPlatform::Bios64AVX => self.compile_bios64_avx(&mut code, program),
             TargetPlatform::Bios64AVX512 => self.compile_bios64_avx512(&mut code, program),
-            _ => { code.push_str("; Unsupported BIOS target\n"); code }
+            _ => { code.push_str("; Unsupported BIOS target\n"); }
         }
+        
+        code
     }
     
-    fn compile_bios16(&mut self, code: &mut String, program: &Program) -> String {
+    fn compile_bios16(&mut self, code: &mut String, program: &Program) {
         code.push_str("; Rython 16-bit Bootloader\n\n");
         code.push_str("    org 0x7C00\n");
         code.push_str("    bits 16\n\n");
@@ -138,16 +207,35 @@ impl NasmEmitter {
         code.push_str("    popa\n");
         code.push_str("    ret\n\n");
         
+        code.push_str("print_decimal:\n");
+        code.push_str("    ; Print decimal number in AX\n");
+        code.push_str("    pusha\n");
+        code.push_str("    mov cx, 0\n");
+        code.push_str("    mov bx, 10\n");
+        code.push_str(".div_loop:\n");
+        code.push_str("    xor dx, dx\n");
+        code.push_str("    div bx\n");
+        code.push_str("    push dx\n");
+        code.push_str("    inc cx\n");
+        code.push_str("    test ax, ax\n");
+        code.push_str("    jnz .div_loop\n");
+        code.push_str(".print_loop:\n");
+        code.push_str("    pop ax\n");
+        code.push_str("    add al, '0'\n");
+        code.push_str("    mov ah, 0x0E\n");
+        code.push_str("    int 0x10\n");
+        code.push_str("    loop .print_loop\n");
+        code.push_str("    popa\n");
+        code.push_str("    ret\n\n");
+        
         code.push_str("msg:\n");
         code.push_str("    db 'Rython 16-bit', 0\n\n");
         
         code.push_str("    times 510-($-$$) db 0\n");
         code.push_str("    dw 0xAA55\n");
-        
-        code.clone()
     }
     
-    fn compile_bios32(&mut self, code: &mut String, program: &Program) -> String {
+    fn compile_bios32(&mut self, code: &mut String, program: &Program) {
         code.push_str("; Rython 32-bit Bootloader\n\n");
         code.push_str("    org 0x7C00\n");
         code.push_str("    bits 16\n\n");
@@ -169,9 +257,11 @@ impl NasmEmitter {
         code.push_str("    out 0x92, al\n\n");
         
         code.push_str("    lgdt [gdt32_desc]\n\n");
+        
         code.push_str("    mov eax, cr0\n");
         code.push_str("    or eax, 1\n");
         code.push_str("    mov cr0, eax\n\n");
+        
         code.push_str("    jmp 0x08:protected_mode\n\n");
         
         code.push_str("    bits 32\n");
@@ -210,6 +300,30 @@ impl NasmEmitter {
         code.push_str("    popa\n");
         code.push_str("    ret\n\n");
         
+        code.push_str("print_decimal_32:\n");
+        code.push_str("    ; Print decimal number in EAX\n");
+        code.push_str("    pusha\n");
+        code.push_str("    mov ecx, 0\n");
+        code.push_str("    mov ebx, 10\n");
+        code.push_str("    mov edi, 0xB8000 + 160  ; Second line\n");
+        code.push_str(".div_loop:\n");
+        code.push_str("    xor edx, edx\n");
+        code.push_str("    div ebx\n");
+        code.push_str("    push dx\n");
+        code.push_str("    inc ecx\n");
+        code.push_str("    test eax, eax\n");
+        code.push_str("    jnz .div_loop\n");
+        code.push_str(".print_loop:\n");
+        code.push_str("    pop ax\n");
+        code.push_str("    add al, '0'\n");
+        code.push_str("    mov [edi], al\n");
+        code.push_str("    inc edi\n");
+        code.push_str("    mov byte [edi], 0x0F\n");
+        code.push_str("    inc edi\n");
+        code.push_str("    loop .print_loop\n");
+        code.push_str("    popa\n");
+        code.push_str("    ret\n\n");
+        
         // GDT
         code.push_str("gdt32:\n");
         code.push_str("    dq 0x0000000000000000\n");
@@ -225,12 +339,10 @@ impl NasmEmitter {
         
         code.push_str("    times 510-($-$$) db 0\n");
         code.push_str("    dw 0xAA55\n");
-        
-        code.clone()
     }
     
-    // FIXED 64-bit bootloader
-    fn compile_bios64_fixed(&mut self, code: &mut String, program: &Program) -> String {
+    // FIXED 64-bit bootloader - with corrected instructions
+    fn compile_bios64_fixed(&mut self, code: &mut String, program: &Program) {
         code.push_str("; Rython 64-bit Bootloader - Fixed Version\n\n");
         code.push_str("    org 0x7C00\n");
         code.push_str("    bits 16\n\n");
@@ -238,7 +350,7 @@ impl NasmEmitter {
         code.push_str("    cli\n");
         code.push_str("    xor ax, ax\n");
         code.push_str("    mov ds, ax\n");
-        code.push_str("    mov es, ax\n");
+        code.push_str("    mov es, ax\n");  // FIXED: was "moves, ax"
         code.push_str("    mov ss, ax\n");
         code.push_str("    mov sp, 0x7C00\n");
         code.push_str("    sti\n");
@@ -250,7 +362,7 @@ impl NasmEmitter {
         // Simple A20 enable
         code.push_str("    in al, 0x92\n");
         code.push_str("    or al, 2\n");
-        code.push_str("    out 0x92, al\n\n");
+        code.push_str("    out 0x92, al\n\n");  // FIXED: was "oct"
         
         // Load 32-bit GDT
         code.push_str("    lgdt [gdt32_desc]\n\n");
@@ -266,7 +378,7 @@ impl NasmEmitter {
         code.push_str("protected_mode:\n");
         code.push_str("    mov ax, 0x10\n");
         code.push_str("    mov ds, ax\n");
-        code.push_str("    mov es, ax\n");
+        code.push_str("    mov es, ax\n");  // FIXED: was "moves, ax"
         code.push_str("    mov fs, ax\n");
         code.push_str("    mov gs, ax\n");
         code.push_str("    mov ss, ax\n");
@@ -365,6 +477,38 @@ impl NasmEmitter {
         code.push_str("    pop rdi\n");
         code.push_str("    ret\n\n");
         
+        // Add missing print_decimal_64 function
+        code.push_str("print_decimal_64:\n");
+        code.push_str("    ; Print decimal number in RAX\n");
+        code.push_str("    push rdi\n");
+        code.push_str("    push rcx\n");
+        code.push_str("    push rdx\n");
+        code.push_str("    push rbx\n");
+        code.push_str("    \n");
+        code.push_str("    mov rdi, 0xB8000 + 160  ; Second line\n");
+        code.push_str("    mov rcx, 0\n");
+        code.push_str("    mov rbx, 10\n");
+        code.push_str(".div_loop:\n");
+        code.push_str("    xor rdx, rdx\n");
+        code.push_str("    div rbx\n");
+        code.push_str("    push dx\n");
+        code.push_str("    inc rcx\n");
+        code.push_str("    test rax, rax\n");
+        code.push_str("    jnz .div_loop\n");
+        code.push_str(".print_loop:\n");
+        code.push_str("    pop ax\n");
+        code.push_str("    add al, '0'\n");
+        code.push_str("    stosb\n");
+        code.push_str("    mov al, 0x0F\n");
+        code.push_str("    stosb\n");
+        code.push_str("    loop .print_loop\n");
+        code.push_str("    \n");
+        code.push_str("    pop rbx\n");
+        code.push_str("    pop rdx\n");
+        code.push_str("    pop rcx\n");
+        code.push_str("    pop rdi\n");
+        code.push_str("    ret\n\n");
+        
         // ========== GDTs ==========
         code.push_str("gdt32:\n");
         code.push_str("    dq 0x0000000000000000\n");
@@ -392,30 +536,25 @@ impl NasmEmitter {
         
         code.push_str("    times 510-($-$$) db 0\n");
         code.push_str("    dw 0xAA55\n");
-        
-        code.clone()
     }
     
-    // Other BIOS variants (simplified)
-    fn compile_bios64_sse(&mut self, code: &mut String, program: &Program) -> String {
-        let mut asm = self.compile_bios64_fixed(code, program);
-        asm.push_str("\n    ; SSE enabled\n");
-        asm
+    // Other BIOS variants
+    fn compile_bios64_sse(&mut self, code: &mut String, program: &Program) {
+        self.compile_bios64_fixed(code, program);
+        code.push_str("\n    ; SSE enabled\n");
     }
     
-    fn compile_bios64_avx(&mut self, code: &mut String, program: &Program) -> String {
-        let mut asm = self.compile_bios64_fixed(code, program);
-        asm.push_str("\n    ; AVX enabled\n");
-        asm
+    fn compile_bios64_avx(&mut self, code: &mut String, program: &Program) {
+        self.compile_bios64_fixed(code, program);
+        code.push_str("\n    ; AVX enabled\n");
     }
     
-    fn compile_bios64_avx512(&mut self, code: &mut String, program: &Program) -> String {
-        let mut asm = self.compile_bios64_fixed(code, program);
-        asm.push_str("\n    ; AVX-512 enabled\n");
-        asm
+    fn compile_bios64_avx512(&mut self, code: &mut String, program: &Program) {
+        self.compile_bios64_fixed(code, program);
+        code.push_str("\n    ; AVX-512 enabled\n");
     }
     
-    // Compilation helpers
+    // Compilation helpers - KEEP THESE THE SAME
     fn compile_bios16_statements(&mut self, code: &mut String, statements: &[Statement]) {
         for stmt in statements {
             match stmt {

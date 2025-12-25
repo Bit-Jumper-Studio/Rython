@@ -1,4 +1,3 @@
-// src/linker.rs
 use std::process::Command;
 use std::path::Path;
 

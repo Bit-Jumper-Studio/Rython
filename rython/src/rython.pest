@@ -1,4 +1,3 @@
-// Add these rules to your pest grammar
 import_stmt = { "import" ~ import_name ~ ("," ~ import_name)* }
 from_import_stmt = { "from" ~ import_level? ~ module_path ~ "import" ~ import_name ~ ("," ~ import_name)* }
 import_level = { "."+ }

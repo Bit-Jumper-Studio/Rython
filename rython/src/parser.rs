@@ -1,29 +1,29 @@
-//! Complete Parser - Fixed version
 use std::collections::HashMap;
+use serde::{Serialize, Deserialize};
 
 // ==================== AST DEFINITIONS ====================
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Op {
     Add, Sub, Mul, Div, Mod, Pow, FloorDiv,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum CompareOp {
     Eq, Ne, Lt, Le, Gt, Ge, In, NotIn, Is, IsNot,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum BoolOp {
     And, Or,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum UnaryOp {
     Not, Plus, Minus, Invert,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Expr {
     Number(i64),
     Float(f64),
@@ -38,7 +38,7 @@ pub enum Expr {
     Call { func: String, args: Vec<Expr>, kwargs: HashMap<String, Expr> },
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Statement {
     VarDecl { name: String, value: Expr, type_hint: Option<String> },
     Assign { target: String, value: Expr },
@@ -53,7 +53,7 @@ pub enum Statement {
     Continue,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Program {
     pub body: Vec<Statement>,
 }
