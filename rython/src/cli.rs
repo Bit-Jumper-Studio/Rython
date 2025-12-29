@@ -6,6 +6,7 @@ use std::fs;
 use crate::compiler::{RythonCompiler, CompilerConfig, Target as CompTarget};
 use crate::rcl_integration::{compile_with_rcl, RclCli};
 use crate::modules::ModuleRegistry;
+use crate::parser::format_parse_errors;
 use serde_json;
 
 /// Target architectures for the Rython compiler
@@ -57,11 +58,10 @@ impl Target {
 #[command(
     name = "Rython",
     version = env!("CARGO_PKG_VERSION"),
-    about = "Rython Compiler: High-Performance Mode Transitions & Bootloaders",
     color = ColorChoice::Always,
     help_template = "\
 \x1b[1;36m{name}\x1b[0m \x1b[32m{version}\x1b[0m
-{author-with-newline}\x1b[1m{about}\x1b[0m
+{author-with-newline}\x1b{1m{about}\x1b[0m
 
 \x1b[1;33mUSAGE:\x1b[0m 
   {usage}
@@ -75,7 +75,7 @@ impl Target {
   \x1b[36mbios16\x1b[0m          16-bit Real Mode (Legacy, 512B limited)
   \x1b[36mbios32\x1b[0m          32-bit Protected Mode
   \x1b[36mbios64\x1b[0m          64-bit Long Mode (Default)
-  \x1b[36mbios64_sse\x1b[0m      64-bit + SSE Extensions
+  \x1b{36mbios64_sse\x1b[0m      64-bit + SSE Extensions
   \x1b[36mbios64_avx\x1b[0m      64-bit + AVX Support
   \x1b[36mbios64_avx512\x1b[0m   64-bit + AVX-512 Support
   \x1b[36mlinux64\x1b[0m         64-bit Linux ELF
@@ -91,7 +91,7 @@ impl Target {
   rythonc \x1b[32mgenerate-modules\x1b[0m -o ./libs         \x1b[90m# Generate RCL libraries for all modules\x1b[0m
   rythonc \x1b[32mcompile-modules\x1b[0m app.ry --use-rcl   \x1b[90m# Compile with RCL module support\x1b[0m
 
-\x1b[1;90mDocumentation: https://github.com/bitjumper/rython\x1b[0m
+\x1b[1;90mDocumentation: https://github.com/Bit-Jumper-Studio/Rython\x1b[0m
 "
 )]
 struct Cli {
@@ -252,6 +252,18 @@ enum Commands {
         #[arg(long)]
         use_rcl: bool,
     },
+    
+    /// Check syntax of a Rython file without compiling
+    #[command(display_order = 11)]
+    Check {
+        /// Path to the source file (.ry)
+        #[arg(value_name = "FILE")]
+        input: String,
+        
+        /// Show detailed parse tree
+        #[arg(short, long)]
+        ast: bool,
+    },
 }
 
 pub fn run() -> Result<(), String> {
@@ -288,6 +300,9 @@ pub fn run() -> Result<(), String> {
         }
         Some(Commands::CompileModules { input, output, target, use_rcl }) => {
             handle_compile_modules(input, output, target, *use_rcl, &cli)
+        }
+        Some(Commands::Check { input, ast }) => {
+            handle_check(input, *ast, &cli)
         }
         None => {
             let mut cmd = Cli::command();
@@ -360,21 +375,182 @@ fn handle_compile(
     } else {
         // Use regular compiler
         let mut compiler = RythonCompiler::new(config);
-        compiler.compile(&source, &output_name)?;
-    }
-
-    // Final Report
-    let metadata = std::fs::metadata(&output_name).map_err(|e| e.to_string())?;
-    let size_bytes = metadata.len();
-    
-    if !cli.quiet {
-        println!("\n{} Created {} ({} bytes)", "✔".green().bold(), output_name.bright_white().bold(), size_bytes);
-        if size_bytes == 512 {
-            println!("  {} Sector is valid bootloader size (512 bytes)", "★".yellow());
+        match compiler.compile(&source, &output_name) {
+            Ok(_) => {
+                // Final Report
+                let metadata = std::fs::metadata(&output_name).map_err(|e| e.to_string())?;
+                let size_bytes = metadata.len();
+                
+                if !cli.quiet {
+                    println!("\n{} Created {} ({} bytes)", "✔".green().bold(), output_name.bright_white().bold(), size_bytes);
+                    if size_bytes == 512 {
+                        println!("  {} Sector is valid bootloader size (512 bytes)", "★".yellow());
+                    }
+                }
+                return Ok(());
+            }
+            Err(err) => {
+                // Format the error with red "ERROR:"
+                let error_message = if err.starts_with("✗ ") {
+                    // Format: ✗ Found 1 error
+                    format!("{} {}", "ERROR:".red().bold(), &err[2..])
+                } else if err.starts_with("ERROR:") {
+                    // Format: ERROR: ✗ Found 1 error
+                    let parts: Vec<&str> = err.splitn(2, ':').collect();
+                    if parts.len() == 2 {
+                        format!("{}:{}", "ERROR".red().bold(), parts[1])
+                    } else {
+                        format!("{}: {}", "ERROR".red().bold(), err)
+                    }
+                } else {
+                    format!("{}: {}", "ERROR".red().bold(), err)
+                };
+                
+                return Err(error_message);
+            }
         }
     }
     
     Ok(())
+}
+
+fn handle_check(input: &str, show_ast: bool, cli: &Cli) -> Result<(), String> {
+    if !cli.quiet {
+        println!("{}", "── Rython Syntax Check ──────────────────────────────────".bright_black());
+    }
+
+    let input_path = Path::new(input);
+    if !input_path.exists() {
+        return Err(format!("Source file not found: {}", input));
+    }
+
+    if !cli.quiet {
+        println!("{} {}", "Checking".green().bold(), input.cyan());
+    }
+    
+    let source = std::fs::read_to_string(input)
+        .map_err(|e| format!("IO Error: {}", e))?;
+    
+    log_status("Parsing", input);
+    
+    match crate::parser::parse_program(&source) {
+        Ok(program) => {
+            if !cli.quiet {
+                println!("\n{} Syntax check passed!", "✔".green().bold());
+                println!("  {} statements parsed", program.body.len());
+            }
+            
+            if show_ast {
+                println!("\n{}", "AST Structure:".yellow().bold());
+                print_ast(&program, 0);
+            }
+            
+            Ok(())
+        }
+        Err(errors) => {
+            let error_output = format_parse_errors(&errors, &source);
+            // Format the error with red "ERROR:"
+            let formatted_error = if error_output.starts_with("✗ ") {
+                format!("{} {}", "ERROR:".red().bold(), &error_output[2..])
+            } else if error_output.starts_with("ERROR:") {
+                let parts: Vec<&str> = error_output.splitn(2, ':').collect();
+                if parts.len() == 2 {
+                    format!("{}:{}", "ERROR".red().bold(), parts[1])
+                } else {
+                    format!("{}: {}", "ERROR".red().bold(), error_output)
+                }
+            } else {
+                format!("{}: {}", "ERROR".red().bold(), error_output)
+            };
+            
+            Err(formatted_error)
+        }
+    }
+}
+
+fn print_ast(program: &crate::parser::Program, indent: usize) {
+    let indent_str = "  ".repeat(indent);
+    
+    for (i, stmt) in program.body.iter().enumerate() {
+        print!("{}{:2}. ", indent_str, i + 1);
+        match stmt {
+            crate::parser::Statement::VarDecl { name, value, type_hint, span } => {
+                println!("VarDecl: {} = ... (type: {:?}) [{}]", 
+                    name, 
+                    type_hint, 
+                    span);
+                print_expr(value, indent + 1);
+            }
+            crate::parser::Statement::Assign { target, value, span } => {
+                println!("Assign: {} = ... [{}]", target, span);
+                print_expr(value, indent + 1);
+            }
+            crate::parser::Statement::Expr(expr) => {
+                println!("Expr: [{}]", expr.span());
+                print_expr(expr, indent + 1);
+            }
+            crate::parser::Statement::FunctionDef { name, args, body, span } => {
+                println!("FunctionDef: {}({}) [{}]", name, args.join(", "), span);
+                for stmt in body {
+                    print_ast(&crate::parser::Program { body: vec![stmt.clone()], span: *span }, indent + 1);
+                }
+            }
+            crate::parser::Statement::If { condition, then_block, elif_blocks, else_block, span } => {
+                println!("If [{}]", span);
+                print!("{}  condition: ", indent_str);
+                print_expr(condition, indent + 2);
+                println!("{}  then block ({} statements):", indent_str, then_block.len());
+                for stmt in then_block {
+                    print_ast(&crate::parser::Program { body: vec![stmt.clone()], span: *span }, indent + 2);
+                }
+                if !elif_blocks.is_empty() {
+                    println!("{}  elif blocks ({}):", indent_str, elif_blocks.len());
+                    for (cond, block) in elif_blocks {
+                        print!("{}    condition: ", indent_str);
+                        print_expr(cond, indent + 3);
+                        println!("{}    block ({} statements):", indent_str, block.len());
+                        for stmt in block {
+                            print_ast(&crate::parser::Program { body: vec![stmt.clone()], span: *span }, indent + 3);
+                        }
+                    }
+                }
+                if let Some(else_block) = else_block {
+                    println!("{}  else block ({} statements):", indent_str, else_block.len());
+                    for stmt in else_block {
+                        print_ast(&crate::parser::Program { body: vec![stmt.clone()], span: *span }, indent + 2);
+                    }
+                }
+            }
+            _ => {
+                println!("{:?}", stmt);
+            }
+        }
+    }
+}
+
+fn print_expr(expr: &crate::parser::Expr, indent: usize) {
+    let indent_str = "  ".repeat(indent);
+    
+    match expr {
+        crate::parser::Expr::Number(n, span) => println!("{}Number: {} [{}]", indent_str, n, span),
+        crate::parser::Expr::Float(f, span) => println!("{}Float: {} [{}]", indent_str, f, span),
+        crate::parser::Expr::Boolean(b, span) => println!("{}Boolean: {} [{}]", indent_str, b, span),
+        crate::parser::Expr::String(s, span) => println!("{}String: \"{}\" [{}]", indent_str, s, span),
+        crate::parser::Expr::Var(name, span) => println!("{}Var: {} [{}]", indent_str, name, span),
+        crate::parser::Expr::None(span) => println!("{}None [{}]", indent_str, span),
+        crate::parser::Expr::BinOp { left, op, right, span } => {
+            println!("{}BinOp: {:?} [{}]", indent_str, op, span);
+            print_expr(left, indent + 1);
+            print_expr(right, indent + 1);
+        }
+        crate::parser::Expr::Call { func, args, span, .. } => {
+            println!("{}Call: {}({}) [{}]", indent_str, func, args.len(), span);
+            for arg in args {
+                print_expr(arg, indent + 1);
+            }
+        }
+        _ => println!("{}Expr: {:?}", indent_str, expr),
+    }
 }
 
 fn handle_create_rcl(
@@ -1177,7 +1353,13 @@ fn run_basic_tests(verbose: bool) -> Result<(), String> {
     let test_code = "var x = 42";
     match crate::parser::parse_program(test_code) {
         Ok(_) => println!("{}", "OK".green()),
-        Err(e) => return Err(format!("Parser test failed: {}", e)),
+        Err(errors) => {
+            println!("{}", "FAILED".red());
+            for error in errors {
+                println!("    {}", error);
+            }
+            return Err("Parser test failed".to_string());
+        }
     }
 
     print!("  Testing emitter... ");
@@ -1214,7 +1396,13 @@ fn run_basic_tests(verbose: bool) -> Result<(), String> {
 
     if verbose {
         println!("  Running verbose tests...");
-        // Add more detailed tests here
+        // Test error handling
+        let error_code = "var x = (5 + 3  # Missing closing parenthesis";
+        println!("    Testing error recovery...");
+        match crate::parser::parse_program(error_code) {
+            Ok(_) => println!("      No errors found (unexpected)"),
+            Err(errors) => println!("      Found {} errors (expected)", errors.len()),
+        }
     }
 
     println!("{}", "All tests passed!".bright_green().bold());

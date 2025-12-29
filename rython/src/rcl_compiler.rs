@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use crate::parser::{Program, Statement, Expr};
+use crate::parser::{Program, Statement, Expr, Position, Span};
 use serde::{Serialize, Deserialize};
 
 /// RCL File Format Version
@@ -169,17 +169,17 @@ impl RclCompiler {
     
     fn compile_statement(&mut self, stmt: &Statement) -> Result<(), String> {
         match stmt {
-            Statement::VarDecl { name, value, type_hint: _ } => {
+            Statement::VarDecl { name, value, type_hint: _, span: _ } => {
                 self.compile_variable(name, value)?;
             }
-            Statement::FunctionDef { name, args, body } => {
+            Statement::FunctionDef { name, args, body, span: _ } => {
                 self.compile_function(name, args, body)?;
             }
             Statement::Expr(expr) => {
                 // Handle export directives first
-                if let Expr::Call { func, args, .. } = expr {
+                if let Expr::Call { func, args, kwargs: _, span: _ } = expr {
                     if func == "export" && !args.is_empty() {
-                        if let Expr::String(s) = &args[0] {
+                        if let Expr::String(s, _) = &args[0] {
                             // Store export request for later processing
                             self.export_requests.push(s.clone());
                             return Ok(());
@@ -198,7 +198,7 @@ impl RclCompiler {
                     self.library.entries.push(entry);
                 }
             }
-            Statement::Assign { target, value } => {
+            Statement::Assign { target, value, span: _ } => {
                 self.compile_assignment(target, value)?;
             }
             _ => {
@@ -249,6 +249,7 @@ impl RclCompiler {
         // Create a minimal program from the function body
         let func_program = Program {
             body: body.to_vec(),
+            span: Span::single(Position::start()), // Fixed: Added missing span field
         };
         
         // Determine function signature
@@ -376,11 +377,11 @@ impl RclCompiler {
     
     fn expr_to_string(&self, expr: &Expr) -> Result<String, String> {
         match expr {
-            Expr::Number(n) => Ok(n.to_string()),
-            Expr::Float(f) => Ok(f.to_string()),
-            Expr::Boolean(b) => Ok(b.to_string()),
-            Expr::String(s) => Ok(s.clone()),
-            Expr::BinOp { left, op, right } => {
+            Expr::Number(n, _) => Ok(n.to_string()),
+            Expr::Float(f, _) => Ok(f.to_string()),
+            Expr::Boolean(b, _) => Ok(b.to_string()),
+            Expr::String(s, _) => Ok(s.clone()),
+            Expr::BinOp { left, op, right, span: _ } => {
                 let left_str = self.expr_to_string(left)?;
                 let right_str = self.expr_to_string(right)?;
                 let op_str = match op {
@@ -401,13 +402,13 @@ impl RclCompiler {
     fn expr_to_constant(&self, expr: &Expr) -> Result<Option<RclConstant>, String> {
         // Only simple expressions can be constants
         match expr {
-            Expr::Number(n) => Ok(Some(RclConstant {
+            Expr::Number(n, _) => Ok(Some(RclConstant {
                 name: format!("const_{}", n),
                 value_type: "int".to_string(),
                 value: n.to_string(),
                 export: false,
             })),
-            Expr::String(s) => Ok(Some(RclConstant {
+            Expr::String(s, _) => Ok(Some(RclConstant {
                 name: format!("str_{}", s.replace(|c: char| !c.is_alphanumeric(), "_")),
                 value_type: "string".to_string(),
                 value: s.clone(),
@@ -422,7 +423,7 @@ impl RclCompiler {
         // Simple purity analysis
         for stmt in body {
             match stmt {
-                Statement::Expr(Expr::Call { func, .. }) => {
+                Statement::Expr(Expr::Call { func, args: _, kwargs: _, span: _ }) => {
                     // Functions with side effects
                     if func == "print" || func == "input" || func.starts_with("sys_") {
                         return false;
@@ -553,89 +554,21 @@ impl RclCompiler {
     
     /// Create a simple RCL library with basic functions
     pub fn create_stdlib(target: &str) -> Result<RclLibrary, String> {
+        let source_code = r#"
+def add(a, b): return a + b
+def subtract(a, b): return a - b
+def multiply(a, b): return a * b
+def divide(a, b): return a / b
+var PI = 3.141592653589793
+var E = 2.718281828459045
+"#;
+        
+        let program = crate::parser::parse_program(source_code)
+            .map_err(|e| format!("Parse error: {:?}", e))?;
+        
         let mut compiler = Self::new("rython_stdlib", target);
         compiler.export_all();
-        
-        // Add basic math functions
-        let math_program = crate::parser::parse_program(
-            "def add(a, b): return a + b\n\
-             def subtract(a, b): return a - b\n\
-             def multiply(a, b): return a * b\n\
-             def divide(a, b): return a / b\n\
-             def abs(x): pass\n\
-             def pow(base, exp): pass\n\
-             def max(a, b): pass\n\
-             def min(a, b): pass\n\
-             def sum(arr): pass\n\
-             def round(x): pass\n\
-             def floor(x): pass\n\
-             def ceil(x): pass\n\
-             def sqrt(x): pass\n\
-             def sin(x): pass\n\
-             def cos(x): pass\n\
-             def tan(x): pass\n\
-             def log(x): pass\n\
-             def exp(x): pass\n\
-             def pi(): pass\n\
-             def e(): pass\n\
-             var PI = 3.141592653589793\n\
-             var E = 2.718281828459045\n\
-             def upper(s): pass\n\
-             def lower(s): pass\n\
-             def strip(s): pass\n\
-             def lstrip(s): pass\n\
-             def rstrip(s): pass\n\
-             def find(s, sub): pass\n\
-             def replace(s, old, new): pass\n\
-             def split(s, sep): pass\n\
-             def join(sep, arr): pass\n\
-             def startswith(s, sub): pass\n\
-             def endswith(s, sub): pass\n\
-             def isdigit(s): pass\n\
-             def isalpha(s): pass\n\
-             def format(s, *args): pass\n\
-             def input(prompt): pass\n\
-             def open(file, mode): pass\n\
-             def exit(code): pass\n\
-             var stdin = 0\n\
-             var stdout = 1\n\
-             var stderr = 2\n\
-             def print(*args): pass\n\
-             def type(obj): pass\n\
-             def len(obj): pass\n\
-             def range(start, stop, step): pass\n\
-             def bool(obj): pass\n\
-             def int(obj): pass\n\
-             def str(obj): pass\n\
-             def float(obj): pass\n\
-             var True = 1\n\
-             var False = 0\n\
-             var None = 0\n\
-             def array(typecode, initializer): pass\n\
-             def zeros(count): pass\n\
-             def ones(count): pass\n\
-             def append(arr, item): pass\n\
-             def extend(arr, other): pass\n\
-             def insert(arr, i, item): pass\n\
-             def remove(arr, item): pass\n\
-             def count(arr, item): pass\n\
-             def product(arr): pass\n\
-             def mean(arr): pass\n\
-             def sort(arr): pass\n\
-             def reverse(arr): pass\n\
-             def to_int(arr): pass\n\
-             def to_float(arr): pass\n\
-             var TYPECODE_I8 = 'b'\n\
-             var TYPECODE_U8 = 'B'\n\
-             var TYPECODE_I16 = 'h'\n\
-             var TYPECODE_U16 = 'H'\n\
-             var TYPECODE_I32 = 'i'\n\
-             var TYPECODE_U32 = 'I'\n\
-             var TYPECODE_F32 = 'f'\n\
-             var TYPECODE_F64 = 'd'"
-        )?;
-        
-        compiler.compile_program(&math_program)?;
+        compiler.compile_program(&program)?;
         compiler.finalize()?;
         
         Ok(compiler.library)
@@ -743,19 +676,19 @@ impl RclImportManager {
         
         for stmt in &program.body {
             match stmt {
-                Statement::Expr(Expr::Call { func, args, .. }) if func == "import" => {
+                Statement::Expr(Expr::Call { func, args, kwargs: _, span: _ }) if func == "import" => {
                     // Handle import statement
-                    if let Some(Expr::String(lib_name)) = args.get(0) {
+                    if let Some(Expr::String(lib_name, _)) = args.get(0) {
                         println!("Importing library: {}", lib_name);
                         // Library is already loaded by the compiler
                     }
                 }
-                Statement::Expr(Expr::Call { func, args, .. }) if func == "from" => {
+                Statement::Expr(Expr::Call { func, args, kwargs: _, span: _ }) if func == "from" => {
                     // Handle: from "library" import symbol
-                    if let (Some(Expr::String(lib_name)), Some(Expr::Call { func: import_func, args: import_args, .. })) = 
+                    if let (Some(Expr::String(lib_name, _)), Some(Expr::Call { func: import_func, args: import_args, kwargs: _, span: _ })) = 
                         (args.get(0), args.get(1)) {
                         if import_func == "import" {
-                            if let Some(Expr::String(symbol)) = import_args.get(0) {
+                            if let Some(Expr::String(symbol, _)) = import_args.get(0) {
                                 println!("Importing {} from {}", symbol, lib_name);
                                 // Mark symbol as imported
                                 self.imported_symbols.insert(symbol.clone());
@@ -771,6 +704,7 @@ impl RclImportManager {
         
         Ok(Program {
             body: expanded_statements,
+            span: program.span, // Fixed: Use the original program's span
         })
     }
     
@@ -850,9 +784,9 @@ impl AutoImportResolver {
         let mut imports = Vec::new();
         
         for stmt in &program.body {
-            if let Statement::Expr(Expr::Call { func, args, .. }) = stmt {
+            if let Statement::Expr(Expr::Call { func, args, kwargs: _, span: _ }) = stmt {
                 if func == "import" && !args.is_empty() {
-                    if let Expr::String(name) = &args[0] {
+                    if let Expr::String(name, _) = &args[0] {
                         imports.push(name.clone());
                     }
                 }
@@ -894,7 +828,10 @@ impl AutoImportResolver {
             }
         }
         
-        Program { body: filtered }
+        Program { 
+            body: filtered,
+            span: program.span // Fixed: Use the original program's span
+        }
     }
 }
 

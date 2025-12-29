@@ -1,3 +1,4 @@
+
 use std::path::Path;
 use std::fs;
 use crate::parser::parse_program;
@@ -44,7 +45,7 @@ impl RythonCompilerWithRcl {
         
         // Parse source
         let program = parse_program(source)
-            .map_err(|e| format!("Parse error: {}", e))?;
+            .map_err(|e| format!("Parse error: {:?}", e))?;
         
         // Extract required modules
         let required_modules = self.module_registry.extract_required_modules(&program);
@@ -211,7 +212,7 @@ impl RclCli {
         
         // Parse
         let program = parse_program(&source)
-            .map_err(|e| format!("Parse error: {}", e))?;
+            .map_err(|e| format!("Parse error: {:?}", e))?;
         
         // Extract library name from filename
         let lib_name = Path::new(source_file)

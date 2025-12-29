@@ -350,7 +350,7 @@ impl NasmEmitter {
         code.push_str("    cli\n");
         code.push_str("    xor ax, ax\n");
         code.push_str("    mov ds, ax\n");
-        code.push_str("    mov es, ax\n");  // FIXED: was "moves, ax"
+        code.push_str("    mov es, ax\n");
         code.push_str("    mov ss, ax\n");
         code.push_str("    mov sp, 0x7C00\n");
         code.push_str("    sti\n");
@@ -362,7 +362,7 @@ impl NasmEmitter {
         // Simple A20 enable
         code.push_str("    in al, 0x92\n");
         code.push_str("    or al, 2\n");
-        code.push_str("    out 0x92, al\n\n");  // FIXED: was "oct"
+        code.push_str("    out 0x92, al\n\n");
         
         // Load 32-bit GDT
         code.push_str("    lgdt [gdt32_desc]\n\n");
@@ -378,7 +378,7 @@ impl NasmEmitter {
         code.push_str("protected_mode:\n");
         code.push_str("    mov ax, 0x10\n");
         code.push_str("    mov ds, ax\n");
-        code.push_str("    mov es, ax\n");  // FIXED: was "moves, ax"
+        code.push_str("    mov es, ax\n");
         code.push_str("    mov fs, ax\n");
         code.push_str("    mov gs, ax\n");
         code.push_str("    mov ss, ax\n");
@@ -605,7 +605,7 @@ impl NasmEmitter {
     
     fn compile_bios16_expression(&mut self, code: &mut String, expr: &Expr) {
         match expr {
-            Expr::Number(n) => {
+            Expr::Number(n, _) => {
                 code.push_str(&format!("    ; Number: {}\n", n));
                 code.push_str(&format!("    mov ax, {}\n", n));
                 code.push_str("    call print_decimal\n");
@@ -616,7 +616,7 @@ impl NasmEmitter {
     
     fn compile_bios32_expression(&mut self, code: &mut String, expr: &Expr) {
         match expr {
-            Expr::Number(n) => {
+            Expr::Number(n, _) => {
                 code.push_str(&format!("    ; Number: {}\n", n));
                 code.push_str(&format!("    mov eax, {}\n", n));
                 code.push_str("    call print_decimal_32\n");
@@ -627,7 +627,7 @@ impl NasmEmitter {
     
     fn compile_bios64_expression(&mut self, code: &mut String, expr: &Expr) {
         match expr {
-            Expr::Number(n) => {
+            Expr::Number(n, _) => {
                 code.push_str(&format!("    ; Number: {}\n", n));
                 code.push_str(&format!("    mov rax, {}\n", n));
                 code.push_str("    call print_decimal_64\n");

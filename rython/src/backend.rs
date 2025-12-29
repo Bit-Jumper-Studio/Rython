@@ -1,4 +1,4 @@
-use crate::parser::{Program, Statement, Expr};
+use crate::parser::{Program, Statement, Expr, Position, Span};
 
 // Capabilities for backend selection
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -153,7 +153,7 @@ impl Backend for Bios16Backend {
         // Compile each statement
         for stmt in &program.body {
             match stmt {
-                Statement::VarDecl { name, value, type_hint: _ } => {
+                Statement::VarDecl { name, value, type_hint: _, span: _ } => {
                     asm.push_str(&format!("; Variable: {}\n", name));
                     asm.push_str(&self.compile_expression(value)?);
                 }
@@ -188,8 +188,8 @@ impl Backend for Bios16Backend {
     
     fn compile_expression(&self, expr: &Expr) -> Result<String, String> {
         match expr {
-            Expr::Number(n) => Ok(format!("    ; Number: {}\n    mov ax, {}\n    call print_decimal\n", n, n)),
-            Expr::Call { func, args, .. } => {
+            Expr::Number(n, _) => Ok(format!("    ; Number: {}\n    mov ax, {}\n    call print_decimal\n", n, n)),
+            Expr::Call { func, args, kwargs: _, span: _ } => {
                 if func == "print" {
                     let mut code = String::new();
                     for arg in args {
@@ -284,7 +284,7 @@ impl Backend for Bios32Backend {
         // Compile each statement
         for stmt in &program.body {
             match stmt {
-                Statement::VarDecl { name, value, type_hint: _ } => {
+                Statement::VarDecl { name, value, type_hint: _, span: _ } => {
                     asm.push_str(&format!("; Variable: {}\n", name));
                     asm.push_str(&self.compile_expression(value)?);
                 }
@@ -308,6 +308,7 @@ impl Backend for Bios32Backend {
         asm.push_str("    dq 0x00CF9A000000FFFF\n");
         asm.push_str("    dq 0x00CF92000000FFFF\n");
         asm.push_str("gdt32_end:\n\n");
+        
         asm.push_str("gdt32_desc:\n");
         asm.push_str("    dw gdt32_end - gdt32 - 1\n");
         asm.push_str("    dd gdt32\n\n");
@@ -328,7 +329,18 @@ impl Backend for Bios32Backend {
     
     fn compile_expression(&self, expr: &Expr) -> Result<String, String> {
         match expr {
-            Expr::Number(n) => Ok(format!("    mov eax, {}\n    call print_decimal_32\n", n)),
+            Expr::Number(n, _) => Ok(format!("    mov eax, {}\n    call print_decimal_32\n", n)),
+            Expr::Call { func, args, kwargs: _, span: _ } => {
+                if func == "print" {
+                    let mut code = String::new();
+                    for arg in args {
+                        code.push_str(&self.compile_expression(arg)?);
+                    }
+                    Ok(code)
+                } else {
+                    Ok(format!("    call {}\n", func))
+                }
+            }
             _ => Ok("    ; [Expression]\n".to_string()),
         }
     }
@@ -552,9 +564,16 @@ impl Backend for Bios64Backend {
                     asm.push_str("; Expression\n");
                     asm.push_str(&self.compile_expression(expr)?);
                 }
-                Statement::FunctionDef { name, args, body } => {
+                Statement::FunctionDef { name, args, body, span: _ } => {
                     asm.push_str(&format!("; Function: {}\n", name));
                     asm.push_str(&format!("{}:\n", name));
+                    
+                    // Create a Program for the function body with a default span
+                    let _func_program = Program {
+                        body: body.to_vec(),
+                        span: Span::single(Position::start()),
+                    };
+                    
                     asm.push_str(&self.function_prologue(&BackendFunction {
                         name: name.clone(),
                         parameters: args.iter().map(|arg| (arg.clone(), "int".to_string())).collect(),
@@ -574,7 +593,7 @@ impl Backend for Bios64Backend {
                         body: Vec::new(),
                     }));
                 }
-                Statement::VarDecl { name, value, type_hint: _ } => {
+                Statement::VarDecl { name, value, type_hint: _, span: _ } => {
                     asm.push_str(&format!("; Variable: {}\n", name));
                     asm.push_str(&self.compile_expression(value)?);
                 }
@@ -692,12 +711,12 @@ impl Backend for Bios64Backend {
         let mut code = String::new();
         
         match expr {
-            Expr::Number(n) => {
+            Expr::Number(n, _) => {
                 code.push_str(&format!("    ; Number: {}\n", n));
                 code.push_str(&format!("    mov rax, {}\n", n));
                 code.push_str("    call print_decimal_64\n");
             }
-            Expr::Call { func, args, .. } => {
+            Expr::Call { func, args, kwargs: _, span: _ } => {
                 if func == "print" {
                     for arg in args {
                         let arg_code = self.compile_expression(arg)?;
@@ -710,7 +729,7 @@ impl Backend for Bios64Backend {
                     code.push_str(&format!("    call {}\n", func));
                 }
             }
-            Expr::BinOp { left, op, right } => {
+            Expr::BinOp { left, op, right, span: _ } => {
                 let left_code = self.compile_expression(left)?;
                 let right_code = self.compile_expression(right)?;
                 code.push_str(&left_code);
@@ -820,8 +839,8 @@ impl Backend for Linux64Backend {
     
     fn compile_expression(&self, expr: &Expr) -> Result<String, String> {
         match expr {
-            Expr::Number(n) => Ok(format!("    mov rax, {}\n    ; Number expression\n", n)),
-            Expr::Call { func, .. } if func == "print" => {
+            Expr::Number(n, _) => Ok(format!("    mov rax, {}\n    ; Number expression\n", n)),
+            Expr::Call { func, args: _, kwargs: _, span: _ } if func == "print" => {
                 // Real Linux print implementation
                 let print_code = r#"
     ; Print using write syscall
@@ -912,8 +931,8 @@ impl Backend for Windows64Backend {
     
     fn compile_expression(&self, expr: &Expr) -> Result<String, String> {
         match expr {
-            Expr::Number(n) => Ok(format!("    mov rax, {}\n    ; Number expression\n", n)),
-            Expr::Call { func, .. } if func == "print" => {
+            Expr::Number(n, _) => Ok(format!("    mov rax, {}\n    ; Number expression\n", n)),
+            Expr::Call { func, args: _, kwargs: _, span: _ } if func == "print" => {
                 // Real Windows print implementation
                 let print_code = r#"
     ; Windows printf call

@@ -4,7 +4,7 @@ use std::fs;
 use std::process::Command;
 use crate::backend::{Backend, BackendRegistry, BackendModule, Capability};
 use crate::modules::ModuleRegistry;
-use crate::parser::{Program, parse_program, Statement};
+use crate::parser::{Program, parse_program, Statement, format_parse_errors};
 use crate::utils::{find_nasm, find_linker};
 use crate::linker::manual_link;
 
@@ -90,7 +90,8 @@ impl RythonCompiler {
 
     pub fn compile(&mut self, source: &str, output_path: &str) -> Result<(), String> {
         // Parse the source code
-        let program = parse_program(source)?;
+        let program = parse_program(source)
+            .map_err(|errors| format_parse_errors(&errors, source))?;
 
         if self.config.verbose {
             println!("[Rython] Parsed AST successfully");
@@ -263,7 +264,7 @@ impl RythonCompiler {
         for stmt in &program.body {
             if let Statement::Expr(crate::parser::Expr::Call { func, args, .. }) = stmt {
                 if func == "import" && !args.is_empty() {
-                    if let crate::parser::Expr::String(module_name) = &args[0] {
+                    if let crate::parser::Expr::String(module_name, _) = &args[0] {
                         if self.module_registry.get_module(module_name).is_some() {
                             modules.push(module_name.clone());
                         }
