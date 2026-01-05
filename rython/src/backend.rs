@@ -1723,8 +1723,6 @@ impl Backend for Windows64Backend {
                     }
                 }
                 
-                // For binary operations, the result is in rax
-                // We'll leave it there for now, and the print handler will deal with it
             }
             _ => {
                 return Err(format!("Unsupported expression: {:?}", expr));
