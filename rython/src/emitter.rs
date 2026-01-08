@@ -327,70 +327,84 @@ impl NasmEmitter {
     
     // LINUX 64-BIT COMPILATION
     fn compile_linux64(&mut self, program: &Program) -> Result<String, String> {
-        let mut code = String::new();
-        
-        code.push_str("; Rython Linux 64-bit Executable\n");
-        code.push_str("; Format: ELF64\n\n");
-        
-        code.push_str("section .text\n");
-        code.push_str("    bits 64\n");
-        code.push_str("    global _start\n\n");
-        
-        code.push_str("_start:\n");
-        code.push_str("    ; Linux syscall calling convention: rax=syscall#, rdi, rsi, rdx, r10, r8, r9\n\n");
-        
-        // Compile program statements
-        self.compile_linux64_statements(&mut code, &program.body)?;
-        
-        // Exit program
-        code.push_str("    ; Exit with code 0\n");
-        code.push_str("    mov rax, 60         ; sys_exit\n");
-        code.push_str("    xor rdi, rdi        ; exit code 0\n");
-        code.push_str("    syscall\n\n");
-        
-        // Linux syscall helpers
-        code.push_str("; ========== LINUX HELPERS ==========\n\n");
-        
-        code.push_str("linux_print:\n");
-        code.push_str("    ; RDI = string pointer\n");
-        code.push_str("    push rdi\n");
-        code.push_str("    push rsi\n");
-        code.push_str("    push rdx\n");
-        code.push_str("    push rax\n");
-        code.push_str("    \n");
-        code.push_str("    ; Calculate length\n");
-        code.push_str("    mov rsi, rdi\n");
-        code.push_str("    xor rdx, rdx\n");
-        code.push_str(".len_loop:\n");
-        code.push_str("    cmp byte [rsi + rdx], 0\n");
-        code.push_str("    je .len_done\n");
-        code.push_str("    inc rdx\n");
-        code.push_str("    jmp .len_loop\n");
-        code.push_str(".len_done:\n");
-        code.push_str("    \n");
-        code.push_str("    ; Write to stdout\n");
-        code.push_str("    mov rax, 1          ; sys_write\n");
-        code.push_str("    mov rdi, 1          ; fd = stdout\n");
-        code.push_str("    ; rsi already set to buffer\n");
-        code.push_str("    ; rdx already set to count\n");
-        code.push_str("    syscall\n");
-        code.push_str("    \n");
-        code.push_str("    pop rax\n");
-        code.push_str("    pop rdx\n");
-        code.push_str("    pop rsi\n");
-        code.push_str("    pop rdi\n");
-        code.push_str("    ret\n\n");
-        
-        // Data section
-        code.push_str("section .data\n");
-        
-        // String literals
-        for (string, label) in &self.string_literals {
-            code.push_str(&format!("{}: db '{}', 10, 0\n", label, string)); // Add newline for Linux
-        }
-        
-        Ok(code)
+    let mut code = String::new();
+    
+    code.push_str("; Rython Linux 64-bit Executable\n");
+    code.push_str("; Format: ELF64\n\n");
+    
+    code.push_str("section .text\n");
+    code.push_str("    bits 64\n");
+    code.push_str("    global _start\n\n");
+    
+    // FIXED: Proper entry point
+    code.push_str("_start:\n");
+    code.push_str("    ; Set up stack\n");
+    code.push_str("    mov rbp, rsp\n");
+    code.push_str("    and rsp, -16         ; Align stack to 16 bytes\n");
+    code.push_str("    call main\n");
+    code.push_str("    ; Exit after main returns\n");
+    code.push_str("    mov rax, 60         ; sys_exit\n");
+    code.push_str("    xor rdi, rdi        ; exit code 0\n");
+    code.push_str("    syscall\n\n");
+    
+    // Main function
+    code.push_str("main:\n");
+    code.push_str("    push rbp\n");
+    code.push_str("    mov rbp, rsp\n");
+    code.push_str("    ; Linux syscall calling convention: rax=syscall#, rdi, rsi, rdx, r10, r8, r9\n\n");
+    
+    // Compile program statements
+    self.compile_linux64_statements(&mut code, &program.body)?;
+    
+    // FIXED: Proper function return
+    code.push_str("    ; Return from main\n");
+    code.push_str("    mov rsp, rbp\n");
+    code.push_str("    pop rbp\n");
+    code.push_str("    ret\n\n");
+    
+    // Linux syscall helpers
+    code.push_str("; ========== LINUX HELPERS ==========\n\n");
+    
+    code.push_str("linux_print:\n");
+    code.push_str("    ; RDI = string pointer\n");
+    code.push_str("    push rdi\n");
+    code.push_str("    push rsi\n");
+    code.push_str("    push rdx\n");
+    code.push_str("    push rax\n");
+    code.push_str("    \n");
+    code.push_str("    ; Calculate length\n");
+    code.push_str("    mov rsi, rdi\n");
+    code.push_str("    xor rdx, rdx\n");
+    code.push_str(".len_loop:\n");
+    code.push_str("    cmp byte [rsi + rdx], 0\n");
+    code.push_str("    je .len_done\n");
+    code.push_str("    inc rdx\n");
+    code.push_str("    jmp .len_loop\n");
+    code.push_str(".len_done:\n");
+    code.push_str("    \n");
+    code.push_str("    ; Write to stdout\n");
+    code.push_str("    mov rax, 1          ; sys_write\n");
+    code.push_str("    mov rdi, 1          ; fd = stdout\n");
+    code.push_str("    ; rsi already set to buffer\n");
+    code.push_str("    ; rdx already set to count\n");
+    code.push_str("    syscall\n");
+    code.push_str("    \n");
+    code.push_str("    pop rax\n");
+    code.push_str("    pop rdx\n");
+    code.push_str("    pop rsi\n");
+    code.push_str("    pop rdi\n");
+    code.push_str("    ret\n\n");
+    
+    // Data section
+    code.push_str("section .data\n");
+    
+    // String literals
+    for (string, label) in &self.string_literals {
+        code.push_str(&format!("{}: db '{}', 10, 0\n", label, string)); // Add newline for Linux
     }
+    
+    Ok(code)
+}
     
     fn compile_windows64_statements(&mut self, code: &mut String, statements: &[Statement]) -> Result<(), String> {
         for stmt in statements {

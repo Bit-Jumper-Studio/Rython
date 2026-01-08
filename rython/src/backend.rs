@@ -1,4 +1,4 @@
-use crate::parser::{Program, Statement, Expr, Position, Span};
+use crate::parser::{Program, Statement, Expr, Position, Span, Op, CompareOp};
 use std::collections::HashMap;
 use std::cell::RefCell;
 
@@ -95,6 +95,16 @@ pub struct SyntaxExtension {
     pub assembly_label: Option<String>, // Associated assembly function
     #[allow(dead_code)]
     pub register_args: Vec<String>, // Which registers to use for arguments
+}
+
+// Struct to track variables
+#[derive(Debug, Clone)]
+pub struct VariableInfo {
+    #[allow(dead_code)]
+    pub name: String,
+    pub offset: i32,  // Negative offset from rbp
+    #[allow(dead_code)]
+    pub type_hint: Option<String>,
 }
 
 pub trait Backend {
@@ -716,6 +726,7 @@ impl Bios64Backend {
         }
         data
     }
+    
 }
 
 impl Backend for Bios64Backend {
@@ -1075,52 +1086,96 @@ impl Backend for Bios64Backend {
                 let label = self.get_string_label(s);
                 code.push_str(&format!("    ; String: '{}'\n", s));
                 code.push_str(&format!("    mov rsi, {}\n", label));
-                code.push_str("    mov rdi, 0xB8000 + 320  ; Third line\n");
+                code.push_str("    mov rdi, 0xB8000\n");
                 code.push_str("    call print_string_64\n");
             }
-            Expr::Call { func, args, kwargs: _, span: _ } => {
-                if func == "print" {
-                    for arg in args {
-                        let arg_code = self.compile_expression(arg)?;
-                        code.push_str(&arg_code);
+            Expr::Var(name, _) => {
+                // BIOS64 doesn't have proper variable tracking yet
+                code.push_str(&format!("    ; Variable: {} (not implemented in BIOS64)\n", name));
+                // Return a dummy value
+                code.push_str("    mov rax, 0\n");
+            }
+            Expr::Call { func, args, kwargs: _, span: _ } if func == "print" => {
+                if let Some(arg) = args.get(0) {
+                    // Handle each type of argument differently
+                    match arg {
+                        Expr::Number(_, _) => {
+                            // Compile the argument as a number
+                            let compiled = self.compile_expression(arg)?;
+                            code.push_str(&compiled);
+                        }
+                        Expr::String(_, _) => {
+                            // Compile the string
+                            let compiled = self.compile_expression(arg)?;
+                            code.push_str(&compiled);
+                        }
+                        Expr::Var(_, _) => {
+                            // For variables, we need to check their type
+                            // For now, compile and let the variable handling code deal with it
+                            let compiled = self.compile_expression(arg)?;
+                            code.push_str(&compiled);
+                        }
+                        // Handle binary operations - the issue was here
+                        Expr::BinOp { .. } => {
+                            // Handle binary operations by compiling the whole expression
+                            // This will recursively compile the operation
+                            let compiled = self.compile_expression(arg)?;
+                            code.push_str(&compiled);
+                            
+                            // After compilation, rax contains the result
+                            code.push_str("    call print_decimal_64\n");
+                        }
+                        _ => {
+                            return Err(format!("Unsupported print argument type: {:?}", arg));
+                        }
                     }
                 } else {
-                    code.push_str(&format!("    call {}\n", func));
+                    // Empty print() - just print a newline
+                    code.push_str("    ; Empty print - just newline\n");
+                    // BIOS64 doesn't have a newline function, so we print a space
+                    code.push_str("    mov rsi, newline_str\n");
+                    code.push_str("    mov rdi, 0xB8000\n");
+                    code.push_str("    call print_string_64\n");
                 }
             }
             Expr::BinOp { left, op, right, span: _ } => {
+                // Compile left side
                 let left_code = self.compile_expression(left)?;
-                let right_code = self.compile_expression(right)?;
                 code.push_str(&left_code);
-                code.push_str(&right_code);
+                code.push_str("    push rax\n");
                 
-                code.push_str("    ; Binary operation\n");
-                code.push_str("    pop rbx\n");
+                // Compile right side
+                let right_code = self.compile_expression(right)?;
+                code.push_str(&right_code);
+                code.push_str("    mov rbx, rax\n");
                 code.push_str("    pop rax\n");
                 
                 match op {
-                    crate::parser::Op::Add => {
+                    Op::Add => {
                         code.push_str("    add rax, rbx\n");
                     }
-                    crate::parser::Op::Sub => {
+                    Op::Sub => {
                         code.push_str("    sub rax, rbx\n");
                     }
-                    crate::parser::Op::Mul => {
+                    Op::Mul => {
                         code.push_str("    imul rax, rbx\n");
                     }
-                    crate::parser::Op::Div => {
+                    Op::Div => {
                         code.push_str("    xor rdx, rdx\n");
                         code.push_str("    idiv rbx\n");
                     }
+                    Op::Mod => {
+                        code.push_str("    xor rdx, rdx\n");
+                        code.push_str("    div rbx\n");
+                        code.push_str("    mov rax, rdx\n"); // Remainder
+                    }
                     _ => {
-                        code.push_str("    add rax, rbx\n");
+                        return Err(format!("Unsupported operator: {:?}", op));
                     }
                 }
-                
-                code.push_str("    push rax\n");
             }
             _ => {
-                code.push_str("    ; [Expression]\n");
+                return Err(format!("Unsupported expression: {:?}", expr));
             }
         }
         
@@ -1133,7 +1188,10 @@ impl Backend for Bios64Backend {
 pub struct Linux64Backend {
     string_counter: RefCell<u32>,
     string_literals: RefCell<HashMap<String, String>>,
+    symbol_table: RefCell<HashMap<String, VariableInfo>>,
+    current_stack_offset: RefCell<i32>,
     external_asm: Vec<String>, // SSD: Store external assembly
+    label_counter: RefCell<u32>, // For generating unique labels
 }
 
 impl Linux64Backend {
@@ -1141,13 +1199,42 @@ impl Linux64Backend {
         Self {
             string_counter: RefCell::new(0),
             string_literals: RefCell::new(HashMap::new()),
+            symbol_table: RefCell::new(HashMap::new()),
+            current_stack_offset: RefCell::new(0),
             external_asm: Vec::new(),
+            label_counter: RefCell::new(0),
         }
     }
     
     #[allow(dead_code)]
     pub fn add_external_asm(&mut self, asm: &str) {
         self.external_asm.push(asm.to_string());
+    }
+    
+    fn allocate_variable(&self, name: &str) -> i32 {
+        let mut offset = self.current_stack_offset.borrow_mut();
+        let current = -(*offset + 8); // Start at rbp-8
+        *offset += 8;
+        
+        self.symbol_table.borrow_mut().insert(name.to_string(), VariableInfo {
+            name: name.to_string(),
+            offset: current,
+            type_hint: Some("int".to_string()),
+        });
+        
+        current
+    }
+    
+    fn get_variable_offset(&self, name: &str) -> Option<i32> {
+        self.symbol_table.borrow().get(name).map(|v| v.offset)
+    }
+    
+    fn ensure_variable_exists(&self, name: &str) -> i32 {
+        if let Some(offset) = self.get_variable_offset(name) {
+            offset
+        } else {
+            self.allocate_variable(name)
+        }
     }
     
     fn get_string_label(&self, content: &str) -> String {
@@ -1164,13 +1251,317 @@ impl Linux64Backend {
     }
     
     fn generate_string_data(&self) -> String {
-        let literals = self.string_literals.borrow();
-        let mut data = String::new();
-        for (content, label) in &*literals {
-            data.push_str(&format!("{}:\n", label));
-            data.push_str(&format!("    db '{}', 0\n", content.replace("'", "''")));
+    let literals = self.string_literals.borrow();
+    let mut data = String::new();
+    for (content, label) in &*literals {
+        data.push_str(&format!("{}:\n", label));
+        // NO NEWLINE in the string data! Just null terminator
+        data.push_str(&format!("    db '{}', 0\n", content.replace("'", "''")));
+    }
+    data
+}
+    
+    fn count_variables(&self, program: &Program) -> usize {
+        let mut count = 0;
+        let mut seen = std::collections::HashSet::new();
+        
+        for stmt in &program.body {
+            if let Statement::FunctionDef { .. } = stmt {
+                continue;
+            }
+            
+            match stmt {
+                Statement::VarDecl { name, .. } => {
+                    if !seen.contains(name) {
+                        seen.insert(name.clone());
+                        count += 1;
+                    }
+                }
+                Statement::Assign { target, .. } => {
+                    if !seen.contains(target) {
+                        seen.insert(target.clone());
+                        count += 1;
+                    }
+                }
+                _ => {}
+            }
         }
-        data
+        count
+    }
+    
+    fn get_next_label_id(&self) -> u32 {
+        let mut counter = self.label_counter.borrow_mut();
+        let id = *counter;
+        *counter += 1;
+        id
+    }
+    
+    fn allocate_variable_sp_relative(&self, name: &str) -> i32 {
+        let mut offset = self.current_stack_offset.borrow_mut();
+        
+        // Ensure 16-byte alignment
+        if (*offset % 16) != 0 {
+            *offset += 8;
+        }
+        
+        let current = *offset;
+        *offset += 8; // Each variable is 8 bytes
+        
+        self.symbol_table.borrow_mut().insert(name.to_string(), VariableInfo {
+            name: name.to_string(),
+            offset: current,
+            type_hint: Some("int".to_string()),
+        });
+        
+        current
+    }
+    
+    fn get_variable_offset_sp_relative(&self, name: &str) -> Option<i32> {
+        self.symbol_table.borrow().get(name).map(|v| v.offset)
+    }
+    
+    fn ensure_variable_exists_sp_relative(&self, name: &str) -> i32 {
+        if let Some(offset) = self.get_variable_offset_sp_relative(name) {
+            offset
+        } else {
+            self.allocate_variable_sp_relative(name)
+        }
+    }
+    
+    // FIXED: Helper function to compile binary operations
+    fn compile_binary_operation(&self, left: &Expr, op: &Op, right: &Expr) -> Result<String, String> {
+        let mut code = String::new();
+        
+        // Helper to get value into rax
+        fn get_value(backend: &Linux64Backend, expr: &Expr) -> Result<String, String> {
+            match expr {
+                Expr::Number(n, _) => Ok(format!("    mov rax, {}\n", n)),
+                Expr::Var(name, _) => {
+                    if let Some(offset) = backend.get_variable_offset_sp_relative(name) {
+                        Ok(format!("    mov rax, [rsp + {}]\n", offset))
+                    } else {
+                        Err(format!("Undefined variable: {}", name))
+                    }
+                }
+                _ => Err("Unsupported expression type for binary operation".to_string()),
+            }
+        }
+        
+        // Compile left operand
+        code.push_str(&get_value(self, left)?);
+        code.push_str("    push rax\n");  // Save left operand
+        
+        // Compile right operand
+        code.push_str(&get_value(self, right)?);
+        code.push_str("    mov rbx, rax\n");  // Move right to rbx
+        code.push_str("    pop rax\n");       // Restore left to rax
+        
+        // Perform operation
+        match op {
+            Op::Add => {
+                code.push_str("    add rax, rbx\n");
+            }
+            Op::Sub => {
+                code.push_str("    sub rax, rbx\n");
+            }
+            Op::Mul => {
+                code.push_str("    imul rax, rbx\n");
+            }
+            Op::Div => {
+                code.push_str("    xor rdx, rdx\n");
+                code.push_str("    div rbx\n");
+            }
+            Op::Mod => {
+                code.push_str("    xor rdx, rdx\n");
+                code.push_str("    div rbx\n");
+                code.push_str("    mov rax, rdx\n"); // Remainder
+            }
+            _ => return Err(format!("Unsupported operator: {:?}", op)),
+        }
+        
+        Ok(code)
+    }
+    
+    fn generate_helper_function(&self) -> String {
+    let mut helpers = String::new();
+    
+    helpers.push_str("; Simple print string function\n");
+    helpers.push_str("print_string:\n");
+    helpers.push_str("    ; Input: rdi = string address\n");
+    helpers.push_str("    push rax\n");
+    helpers.push_str("    push rdi\n");
+    helpers.push_str("    push rsi\n");
+    helpers.push_str("    push rdx\n");
+    helpers.push_str("    \n");
+    helpers.push_str("    ; Calculate length\n");
+    helpers.push_str("    mov rsi, rdi          ; String address\n");
+    helpers.push_str("    xor rdx, rdx          ; Length counter\n");
+    helpers.push_str(".count_loop:\n");
+    helpers.push_str("    cmp byte [rsi + rdx], 0\n");
+    helpers.push_str("    je .count_done\n");
+    helpers.push_str("    inc rdx\n");
+    helpers.push_str("    jmp .count_loop\n");
+    helpers.push_str(".count_done:\n");
+    helpers.push_str("    \n");
+    helpers.push_str("    ; Write to stdout\n");
+    helpers.push_str("    mov rax, 1           ; sys_write\n");
+    helpers.push_str("    mov rdi, 1           ; stdout\n");
+    helpers.push_str("    ; rsi already has string address\n");
+    helpers.push_str("    ; rdx already has length\n");
+    helpers.push_str("    syscall\n");
+    helpers.push_str("    \n");
+    helpers.push_str("    ; Restore registers\n");
+    helpers.push_str("    pop rdx\n");
+    helpers.push_str("    pop rsi\n");
+    helpers.push_str("    pop rdi\n");
+    helpers.push_str("    pop rax\n");
+    helpers.push_str("    ret\n\n");
+
+    helpers.push_str("; Print decimal number\n");
+    helpers.push_str("print_decimal:\n");
+    helpers.push_str("    ; Input: rax = integer\n");
+    helpers.push_str("    push rbp\n");
+    helpers.push_str("    mov rbp, rsp\n");
+    helpers.push_str("    sub rsp, 32          ; Buffer space\n");
+    helpers.push_str("    \n");
+    helpers.push_str("    ; Save registers\n");
+    helpers.push_str("    push rbx\n");
+    helpers.push_str("    push rcx\n");
+    helpers.push_str("    push rdx\n");
+    helpers.push_str("    push rsi\n");
+    helpers.push_str("    push rdi\n");
+    helpers.push_str("    \n");
+    helpers.push_str("    ; Save the number\n");
+    helpers.push_str("    mov [rbp - 8], rax   ; Save at [rbp-8]\n");
+    helpers.push_str("    \n");
+    helpers.push_str("    ; Point to buffer end\n");
+    helpers.push_str("    lea rdi, [rsp + 31]  ; Last byte of buffer\n");
+    helpers.push_str("    mov byte [rdi], 0    ; Null terminator\n");
+    helpers.push_str("    \n");
+    helpers.push_str("    ; Handle negative numbers\n");
+    helpers.push_str("    mov rax, [rbp - 8]\n");
+    helpers.push_str("    test rax, rax\n");
+    helpers.push_str("    jns .positive\n");
+    helpers.push_str("    neg rax\n");
+    helpers.push_str("    \n");
+    helpers.push_str(".positive:\n");
+    helpers.push_str("    mov rbx, 10\n");
+    helpers.push_str("    \n");
+    helpers.push_str(".convert_loop:\n");
+    helpers.push_str("    xor rdx, rdx\n");
+    helpers.push_str("    div rbx              ; rax = quotient, rdx = remainder\n");
+    helpers.push_str("    add dl, '0'\n");
+    helpers.push_str("    dec rdi\n");
+    helpers.push_str("    mov [rdi], dl\n");
+    helpers.push_str("    test rax, rax\n");
+    helpers.push_str("    jnz .convert_loop\n");
+    helpers.push_str("    \n");
+    helpers.push_str("    ; Add minus sign if needed\n");
+    helpers.push_str("    mov rax, [rbp - 8]\n");
+    helpers.push_str("    test rax, rax\n");
+    helpers.push_str("    jns .print_it\n");
+    helpers.push_str("    dec rdi\n");
+    helpers.push_str("    mov byte [rdi], '-'\n");
+    helpers.push_str("    \n");
+    helpers.push_str(".print_it:\n");
+    helpers.push_str("    ; Calculate length\n");
+    helpers.push_str("    lea rsi, [rsp + 32]  ; End of buffer + 1\n");
+    helpers.push_str("    sub rsi, rdi         ; rsi = length\n");
+    helpers.push_str("    \n");
+    helpers.push_str("    ; Print the number\n");
+    helpers.push_str("    mov rax, 1           ; sys_write\n");
+    helpers.push_str("    mov rdx, rsi         ; length\n");
+    helpers.push_str("    mov rsi, rdi         ; string\n");
+    helpers.push_str("    mov rdi, 1           ; stdout\n");
+    helpers.push_str("    syscall\n");
+    helpers.push_str("    \n");
+    helpers.push_str("    ; Print newline\n");
+    helpers.push_str("    mov rax, 1\n");
+    helpers.push_str("    mov rdi, 1\n");
+    helpers.push_str("    lea rsi, [newline]\n");
+    helpers.push_str("    mov rdx, 1\n");
+    helpers.push_str("    syscall\n");
+    helpers.push_str("    \n");
+    helpers.push_str("    ; Restore registers\n");
+    helpers.push_str("    pop rdi\n");
+    helpers.push_str("    pop rsi\n");
+    helpers.push_str("    pop rdx\n");
+    helpers.push_str("    pop rcx\n");
+    helpers.push_str("    pop rbx\n");
+    helpers.push_str("    \n");
+    helpers.push_str("    mov rsp, rbp\n");
+    helpers.push_str("    pop rbp\n");
+    helpers.push_str("    ret\n\n");
+    
+    // print_newline - simple version
+    helpers.push_str("; Print newline\n");
+    helpers.push_str("print_newline:\n");
+    helpers.push_str("    push rax\n");
+    helpers.push_str("    push rdi\n");
+    helpers.push_str("    push rsi\n");
+    helpers.push_str("    push rdx\n");
+    helpers.push_str("    \n");
+    helpers.push_str("    mov rax, 1\n");
+    helpers.push_str("    mov rdi, 1\n");
+    helpers.push_str("    lea rsi, [newline]\n");
+    helpers.push_str("    mov rdx, 1\n");
+    helpers.push_str("    syscall\n");
+    helpers.push_str("    \n");
+    helpers.push_str("    pop rdx\n");
+    helpers.push_str("    pop rsi\n");
+    helpers.push_str("    pop rdi\n");
+    helpers.push_str("    pop rax\n");
+    helpers.push_str("    ret\n");
+    
+    helpers
+}
+    
+    // Helper function to get value code for simple expressions
+    fn get_value_code(&self, expr: &Expr) -> Result<String, String> {
+        match expr {
+            Expr::Number(n, _) => Ok(format!("    mov rax, {}\n", n)),
+            Expr::Var(name, _) => {
+                if let Some(offset) = self.get_variable_offset_sp_relative(name) {
+                    Ok(format!("    mov rax, [rsp + {}]\n", offset))
+                } else {
+                    Err(format!("Undefined variable: {}", name))
+                }
+            }
+            _ => Err("Unsupported expression type for value extraction".to_string()),
+        }
+    }
+    
+    // Compile binary operation to a value in rax
+    fn compile_binary_op_value(&self, left: &Expr, op: &Op, right: &Expr) -> Result<String, String> {
+        let mut code = String::new();
+        
+        // Left operand
+        code.push_str(&self.get_value_code(left)?);
+        code.push_str("    push rax\n");
+        
+        // Right operand
+        code.push_str(&self.get_value_code(right)?);
+        code.push_str("    mov rbx, rax\n");
+        code.push_str("    pop rax\n");
+        
+        // Perform operation
+        match op {
+            Op::Add => code.push_str("    add rax, rbx\n"),
+            Op::Sub => code.push_str("    sub rax, rbx\n"),
+            Op::Mul => code.push_str("    imul rax, rbx\n"),
+            Op::Div => {
+                code.push_str("    xor rdx, rdx\n");
+                code.push_str("    div rbx\n");
+            }
+            Op::Mod => {
+                code.push_str("    xor rdx, rdx\n");
+                code.push_str("    div rbx\n");
+                code.push_str("    mov rax, rdx\n");
+            }
+            _ => return Err(format!("Unsupported operator: {:?}", op)),
+        }
+        
+        Ok(code)
     }
 }
 
@@ -1196,109 +1587,298 @@ impl Backend for Linux64Backend {
     }
     
     fn compile_program(&mut self, program: &Program) -> Result<String, String> {
-        let mut asm = String::new();
-        
-        asm.push_str("; Rython Linux 64-bit Backend\n");
-        asm.push_str("; Generated from Rython AST\n\n");
-        asm.push_str("    bits 64\n");
-        asm.push_str("    default rel\n\n");
-        
-        asm.push_str("    section .text\n");
-        asm.push_str("    global _start\n\n");
-        
-        asm.push_str("_start:\n");
-        
-        // Compile statements
-        for stmt in &program.body {
-            if let Statement::Expr(expr) = stmt {
-                asm.push_str(&self.compile_expression(expr)?);
+    let mut asm = String::new();
+    
+    asm.push_str("; Rython Linux 64-bit Backend\n");
+    asm.push_str("; Generated from Rython AST\n\n");
+    asm.push_str("    bits 64\n");
+    asm.push_str("    default rel\n\n");
+    
+    asm.push_str("    section .text\n");
+    asm.push_str("    global _start\n\n");
+    
+    // Entry point
+    asm.push_str("_start:\n");
+    asm.push_str("    ; Setup stack frame\n");
+    asm.push_str("    mov rbp, rsp\n");
+    asm.push_str("    and rsp, -16        ; Align stack to 16 bytes\n");
+    asm.push_str("    sub rsp, 64         ; Space for variables and alignment\n");
+    asm.push_str("    \n");
+    asm.push_str("    ; Call main\n");
+    asm.push_str("    call main\n");
+    asm.push_str("    \n");
+    asm.push_str("    ; Exit with return code\n");
+    asm.push_str("    mov rdi, rax        ; Exit code from main\n");
+    asm.push_str("    mov rax, 60         ; sys_exit\n");
+    asm.push_str("    syscall\n\n");
+    
+    // Main function
+    asm.push_str("main:\n");
+    asm.push_str("    push rbp\n");
+    asm.push_str("    mov rbp, rsp\n");
+    asm.push_str("    and rsp, -16        ; Align stack to 16 bytes\n");
+    
+    // Allocate space for variables
+    let var_count = self.count_variables(program);
+    if var_count > 0 {
+        let total_space = ((var_count * 8) + 15) & !15; // Round up to 16-byte multiple
+        asm.push_str(&format!("    sub rsp, {}          ; Space for {} variables\n", 
+            total_space, var_count));
+    }
+    
+    // Reset variable tracking
+    {
+        let mut offset = self.current_stack_offset.borrow_mut();
+        *offset = 16; // Start after saved rbp
+        self.symbol_table.borrow_mut().clear();
+    }
+    
+    // Compile each statement
+    for stmt in &program.body {
+        match stmt {
+            Statement::Expr(expr) => {
+                let expr_code = self.compile_expression(expr)?;
+                asm.push_str(&expr_code);
+            }
+            Statement::VarDecl { name, value, type_hint: _, span: _ } => {
+                asm.push_str(&format!("    ; Variable declaration: {}\n", name));
+                
+                // Allocate space for variable
+                let offset = self.allocate_variable_sp_relative(name);
+                
+                // Compile the value (result in rax)
+                let value_code = self.compile_expression(value)?;
+                asm.push_str(&value_code);
+                
+                // Store value at [rsp + offset]
+                asm.push_str(&format!("    mov [rsp + {}], rax\n", offset));
+            }
+            Statement::Assign { target, value, span: _ } => {
+                asm.push_str(&format!("    ; Assignment: {} = ...\n", target));
+                
+                // Get or allocate variable
+                let offset = self.ensure_variable_exists_sp_relative(target);
+                
+                // Compile the value
+                let value_code = self.compile_expression(value)?;
+                asm.push_str(&value_code);
+                
+                // Store value
+                asm.push_str(&format!("    mov [rsp + {}], rax\n", offset));
+            }
+            _ => {
+                asm.push_str("    ; [Other statement type]\n");
             }
         }
-        
-        // System exit
-        asm.push_str("    ; Exit\n");
-        asm.push_str("    mov rax, 60    ; sys_exit\n");
-        asm.push_str("    xor rdi, rdi   ; exit code 0\n");
-        asm.push_str("    syscall\n");
-        
-        // String print function
-        asm.push_str("\n; Print string function\n");
-        asm.push_str("print_string:\n");
-        asm.push_str("    ; rsi = string address\n");
-        asm.push_str("    push rcx\n");
-        asm.push_str("    push rdx\n");
-        asm.push_str("    push rdi\n");
-        asm.push_str("    push rsi\n");
-        asm.push_str("    \n");
-        asm.push_str("    ; Calculate string length\n");
-        asm.push_str("    mov rdi, rsi\n");
-        asm.push_str("    xor rcx, rcx\n");
-        asm.push_str("    dec rcx\n");
-        asm.push_str(".count_loop:\n");
-        asm.push_str("    inc rcx\n");
-        asm.push_str("    cmp byte [rdi + rcx], 0\n");
-        asm.push_str("    jne .count_loop\n");
-        asm.push_str("    \n");
-        asm.push_str("    ; Write to stdout\n");
-        asm.push_str("    mov rax, 1        ; sys_write\n");
-        asm.push_str("    mov rdi, 1        ; stdout\n");
-        asm.push_str("    mov rdx, rcx      ; length\n");
-        asm.push_str("    syscall\n");
-        asm.push_str("    \n");
-        asm.push_str("    pop rsi\n");
-        asm.push_str("    pop rdi\n");
-        asm.push_str("    pop rdx\n");
-        asm.push_str("    pop rcx\n");
-        asm.push_str("    ret\n\n");
-        
-        // Data section
-        asm.push_str("    section .data\n");
-        asm.push_str(&self.generate_string_data());
-        
-        // SSD: Inject external assembly
-        asm = self.inject_external_asm(&asm, &self.external_asm);
-        
-        Ok(asm)
     }
     
-    fn function_prologue(&self, func: &BackendFunction) -> String {
-        format!("{}:\n    push rbp\n    mov rbp, rsp\n", func.name)
-    }
+    // Return 0 from main
+    asm.push_str("    ; Return from main\n");
+    asm.push_str("    mov rax, 0          ; Return 0\n");
+    asm.push_str("    mov rsp, rbp\n");
+    asm.push_str("    pop rbp\n");
+    asm.push_str("    ret\n\n");
     
-    fn function_epilogue(&self, _func: &BackendFunction) -> String {
-        "    mov rsp, rbp\n    pop rbp\n    ret\n".to_string()
-    }
+    // Helper functions
+    asm.push_str(&self.generate_helper_function());
+    
+    // Data section
+    asm.push_str("    section .data\n");
+    asm.push_str("newline:\n");
+    asm.push_str("    db 10, 0\n\n");
+    
+    // String literals
+    asm.push_str("; String literals\n");
+    asm.push_str(&self.generate_string_data());
+    
+    // SSD: Inject external assembly
+    asm = self.inject_external_asm(&asm, &self.external_asm);
+    
+    Ok(asm)
+}
     
     fn compile_expression(&self, expr: &Expr) -> Result<String, String> {
         match expr {
-            Expr::Number(n, _) => Ok(format!("    ; Number: {}\n    mov rax, {}\n", n, n)),
+            Expr::Number(n, _) => {
+                // Load number into rax
+                Ok(format!("    ; Number: {}\n    mov rax, {}\n", n, n))
+            }
             Expr::String(s, _) => {
                 let label = self.get_string_label(s);
-                Ok(format!(
-                    "    ; String: '{}'\n    mov rsi, {}\n    call print_string\n",
-                    s, label
-                ))
+                // Load string address into rax
+                Ok(format!("    ; String: '{}'\n    lea rax, [{}]\n", s, label))
             }
             Expr::Call { func, args, kwargs: _, span: _ } if func == "print" => {
-                if let Some(arg) = args.get(0) {
-                    self.compile_expression(arg)
+                let mut code = String::new();
+                
+                // Process each argument
+                for arg in args {
+                    match arg {
+                        Expr::String(s, _) => {
+                            let label = self.get_string_label(s);
+                            code.push_str(&format!("    ; String: '{}'\n", s));
+                            code.push_str(&format!("    lea rdi, [{}]\n", label));
+                            code.push_str("    call print_string\n");
+                        }
+                        Expr::Number(n, _) => {
+                            code.push_str(&format!("    ; Number: {}\n", n));
+                            code.push_str(&format!("    mov rax, {}\n", n));
+                            code.push_str("    call print_decimal\n");
+                        }
+                        Expr::BinOp { left, op, right, span: _ } => {
+                            // Handle binary operations
+                            code.push_str("    ; Binary operation\n");
+                            
+                            // Helper function to get value
+                            fn get_value_code(backend: &Linux64Backend, expr: &Expr) -> Result<String, String> {
+                                match expr {
+                                    Expr::Number(n, _) => Ok(format!("    mov rax, {}\n", n)),
+                                    Expr::Var(name, _) => {
+                                        if let Some(offset) = backend.get_variable_offset_sp_relative(name) {
+                                            Ok(format!("    mov rax, [rsp + {}]\n", offset))
+                                        } else {
+                                            Err(format!("Undefined variable: {}", name))
+                                        }
+                                    }
+                                    _ => Err("Unsupported expression type".to_string()),
+                                }
+                            }
+                            
+                            // Left operand
+                            code.push_str(&get_value_code(self, left)?);
+                            code.push_str("    push rax\n");
+                            
+                            // Right operand  
+                            code.push_str(&get_value_code(self, right)?);
+                            code.push_str("    mov rbx, rax\n");
+                            code.push_str("    pop rax\n");
+                            
+                            // Perform operation
+                            match op {
+                                Op::Add => code.push_str("    add rax, rbx\n"),
+                                Op::Sub => code.push_str("    sub rax, rbx\n"),
+                                Op::Mul => code.push_str("    imul rax, rbx\n"),
+                                Op::Div => {
+                                    code.push_str("    xor rdx, rdx\n");
+                                    code.push_str("    div rbx\n");
+                                }
+                                Op::Mod => {
+                                    code.push_str("    xor rdx, rdx\n");
+                                    code.push_str("    div rbx\n");
+                                    code.push_str("    mov rax, rdx\n");
+                                }
+                                _ => return Err(format!("Unsupported operator: {:?}", op)),
+                            }
+                            
+                            // Print the result
+                            code.push_str("    call print_decimal\n");
+                        }
+                        Expr::Var(name, _) => {
+                            if let Some(offset) = self.get_variable_offset_sp_relative(name) {
+                                code.push_str(&format!("    ; Variable: {}\n", name));
+                                code.push_str(&format!("    mov rax, [rsp + {}]\n", offset));
+                                code.push_str("    call print_decimal\n");
+                            } else {
+                                return Err(format!("Undefined variable: {}", name));
+                            }
+                        }
+                        _ => {
+                            return Err(format!("Unsupported argument type in print: {:?}", arg));
+                        }
+                    }
+                }
+                
+                // Add newline at the end of print statement
+                code.push_str("    call print_newline\n");
+                
+                Ok(code)
+            }
+            Expr::Var(name, _) => {
+                if let Some(offset) = self.get_variable_offset_sp_relative(name) {
+                    let mut code = format!("    ; Variable: {}\n    mov rax, [rsp + {}]\n", name, offset);
+                    // For standalone variable expression, print it
+                    code.push_str("    call print_decimal\n");
+                    Ok(code)
                 } else {
-                    Ok("    ; Empty print\n".to_string())
+                    Err(format!("Undefined variable: {}", name))
                 }
             }
-            _ => Ok(format!("    ; {:?}\n", expr)),
+            Expr::BinOp { left, op, right, span: _ } => {
+                // Standalone binary operation - compute and print
+                let mut code = String::new();
+                code.push_str("    ; Binary operation\n");
+                
+                // Same helper as above
+                fn get_value_code(backend: &Linux64Backend, expr: &Expr) -> Result<String, String> {
+                    match expr {
+                        Expr::Number(n, _) => Ok(format!("    mov rax, {}\n", n)),
+                        Expr::Var(name, _) => {
+                            if let Some(offset) = backend.get_variable_offset_sp_relative(name) {
+                                Ok(format!("    mov rax, [rsp + {}]\n", offset))
+                            } else {
+                                Err(format!("Undefined variable: {}", name))
+                            }
+                        }
+                        _ => Err("Unsupported expression type".to_string()),
+                    }
+                }
+                
+                // Left operand
+                code.push_str(&get_value_code(self, left)?);
+                code.push_str("    push rax\n");
+                
+                // Right operand
+                code.push_str(&get_value_code(self, right)?);
+                code.push_str("    mov rbx, rax\n");
+                code.push_str("    pop rax\n");
+                
+                // Operation
+                match op {
+                    Op::Add => code.push_str("    add rax, rbx\n"),
+                    Op::Sub => code.push_str("    sub rax, rbx\n"),
+                    Op::Mul => code.push_str("    imul rax, rbx\n"),
+                    Op::Div => {
+                        code.push_str("    xor rdx, rdx\n");
+                        code.push_str("    div rbx\n");
+                    }
+                    Op::Mod => {
+                        code.push_str("    xor rdx, rdx\n");
+                        code.push_str("    div rbx\n");
+                        code.push_str("    mov rax, rdx\n");
+                    }
+                    _ => return Err(format!("Unsupported operator: {:?}", op)),
+                }
+                
+                // Print the result
+                code.push_str("    call print_decimal\n");
+                Ok(code)
+            }
+            _ => Err(format!("Unsupported expression: {:?}", expr)),
         }
     }
-}
-
-// Add this struct to track variables
-#[derive(Debug, Clone)]
-pub struct VariableInfo {
-    #[allow(dead_code)]
-    pub name: String,
-    pub offset: i32,  // Negative offset from rbp
-    #[allow(dead_code)]
-    pub type_hint: Option<String>,
+    
+    fn function_prologue(&self, func: &BackendFunction) -> String {
+        let mut prologue = String::new();
+        prologue.push_str(&format!("{}:\n", func.name));
+        prologue.push_str("    push rbp\n");
+        prologue.push_str("    mov rbp, rsp\n");
+        
+        // Allocate space for locals
+        let stack_size = func.parameters.len() * 8;
+        if stack_size > 0 {
+            prologue.push_str(&format!("    sub rsp, {}\n", stack_size));
+        }
+        
+        prologue
+    }
+    
+    fn function_epilogue(&self, _func: &BackendFunction) -> String {
+        let mut epilogue = String::new();
+        epilogue.push_str("    mov rsp, rbp\n");
+        epilogue.push_str("    pop rbp\n");
+        epilogue.push_str("    ret\n");
+        epilogue
+    }
 }
 
 // ========== WINDOWS 64-BIT BACKEND ==========
@@ -1660,9 +2240,10 @@ impl Backend for Windows64Backend {
                 if let Some(arg) = args.get(0) {
                     // Handle each type of argument differently
                     match arg {
-                        Expr::Number(_, _) | Expr::BinOp { .. } => {
+                        Expr::Number(_, _) => {
                             // Compile the argument as a number
-                            code.push_str(&self.compile_expression(arg)?);
+                            let compiled = self.compile_expression(arg)?;
+                            code.push_str(&compiled);
                             
                             // The number is already in rax, so we can just print it
                             code.push_str("    mov rdx, rax          ; Second arg: integer value\n");
@@ -1677,12 +2258,31 @@ impl Backend for Windows64Backend {
                         }
                         Expr::String(_, _) => {
                             // Compile the string (which already includes newline)
-                            code.push_str(&self.compile_expression(arg)?);
+                            let compiled = self.compile_expression(arg)?;
+                            code.push_str(&compiled);
                         }
                         Expr::Var(_, _) => {
                             // For variables, we need to check their type
                             // For now, compile and let the variable handling code deal with it
-                            code.push_str(&self.compile_expression(arg)?);
+                            let compiled = self.compile_expression(arg)?;
+                            code.push_str(&compiled);
+                        }
+                        Expr::BinOp { .. } => {
+                            // Handle binary operations by compiling the whole expression
+                            // This will recursively compile the operation
+                            let compiled = self.compile_expression(arg)?;
+                            code.push_str(&compiled);
+                            
+                            // After compilation, rax contains the result
+                            code.push_str("    mov rdx, rax          ; Second arg: integer value\n");
+                            code.push_str("    lea rcx, [printf_format_int] ; First arg: format string for integer\n");
+                            code.push_str("    sub rsp, 32          ; Allocate shadow space\n");
+                            code.push_str("    xor rax, rax          ; No floating point args\n");
+                            code.push_str("    call printf\n");
+                            code.push_str("    add rsp, 32          ; Clean up shadow space\n");
+                            
+                            // Automatically add newline after print
+                            code.push_str("    call print_newline\n");
                         }
                         _ => {
                             return Err(format!("Unsupported print argument type: {:?}", arg));
@@ -1705,24 +2305,28 @@ impl Backend for Windows64Backend {
                 code.push_str("    pop rax\n");
                 
                 match op {
-                    crate::parser::Op::Add => {
+                    Op::Add => {
                         code.push_str("    add rax, rbx\n");
                     }
-                    crate::parser::Op::Sub => {
+                    Op::Sub => {
                         code.push_str("    sub rax, rbx\n");
                     }
-                    crate::parser::Op::Mul => {
+                    Op::Mul => {
                         code.push_str("    imul rax, rbx\n");
                     }
-                    crate::parser::Op::Div => {
+                    Op::Div => {
                         code.push_str("    xor rdx, rdx\n");
                         code.push_str("    idiv rbx\n");
+                    }
+                    Op::Mod => {
+                        code.push_str("    xor rdx, rdx\n");
+                        code.push_str("    div rbx\n");
+                        code.push_str("    mov rax, rdx\n"); // Remainder
                     }
                     _ => {
                         return Err(format!("Unsupported operator: {:?}", op));
                     }
                 }
-                
             }
             _ => {
                 return Err(format!("Unsupported expression: {:?}", expr));

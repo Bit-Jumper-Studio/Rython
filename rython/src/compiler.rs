@@ -221,30 +221,71 @@ impl RythonCompiler {
     }
     
     fn assemble_to_binary(&self, asm_path: &str, output_path: &str) -> Result<(), String> {
-        // Determine output format based on target
-        let format = match self.config.target {
-            Target::Bios16 | Target::Bios32 | Target::Bios64 | 
-            Target::Bios64Sse | Target::Bios64Avx | Target::Bios64Avx512 => "bin",
-            Target::Linux64 => "elf64",
-            Target::Windows64 => "win64",
-        };
+    // Determine output format based on target
+    let format = match self.config.target {
+        Target::Bios16 | Target::Bios32 | Target::Bios64 | 
+        Target::Bios64Sse | Target::Bios64Avx | Target::Bios64Avx512 => "bin",
+        Target::Linux64 => "elf64",
+        Target::Windows64 => "win64",
+    };
+    
+    // Create command based on target
+    let mut command = Command::new("nasm");
+    command.arg("-f").arg(format);
+    
+    // Add additional flags for ELF format
+    if format == "elf64" {
+        command.arg("-g"); // Add debug info
+        command.arg("-F").arg("dwarf"); // Use DWARF format
+    }
+    
+    command.arg("-o").arg(output_path);
+    command.arg(asm_path);
+    
+    if self.config.verbose {
+        println!("[COMPILER] Running NASM command: {:?}", command);
+    }
+    
+    let output = command
+        .output()
+        .map_err(|e| format!("Failed to run NASM: {}. Make sure NASM is installed and in PATH.", e))?;
+    
+    if !output.status.success() {
+        let error_msg = String::from_utf8_lossy(&output.stderr);
+        let output_msg = String::from_utf8_lossy(&output.stdout);
         
-        let output = Command::new("nasm")
-            .arg("-f")
-            .arg(format)
-            .arg("-o")
-            .arg(output_path)
-            .arg(asm_path)
-            .output()
-            .map_err(|e| format!("Failed to run NASM: {}", e))?;
-        
-        if !output.status.success() {
-            let error_msg = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("NASM assembly failed: {}", error_msg));
+        let mut full_error = format!("NASM assembly failed:\nSTDERR: {}\n", error_msg);
+        if !output_msg.is_empty() {
+            full_error.push_str(&format!("STDOUT: {}\n", output_msg));
         }
         
-        Ok(())
+        // Check for common errors
+        if error_msg.contains("file not found") {
+            full_error.push_str("\nPossible solution: Make sure the assembly file exists and the path is correct.");
+        } else if error_msg.contains("unable to open input file") {
+            full_error.push_str("\nPossible solution: Check file permissions and path.");
+        } else if error_msg.contains("parser: instruction expected") {
+            full_error.push_str("\nPossible solution: Check for syntax errors in generated assembly.");
+        }
+        
+        return Err(full_error);
     }
+    
+    if self.config.verbose {
+        println!("[COMPILER] NASM assembly successful");
+        
+        // Check if output file was created
+        if std::path::Path::new(output_path).exists() {
+            let metadata = std::fs::metadata(output_path)
+                .map_err(|e| format!("Failed to get file metadata: {}", e))?;
+            println!("[COMPILER] Output file created: {} ({} bytes)", output_path, metadata.len());
+        } else {
+            return Err(format!("Output file was not created: {}", output_path));
+        }
+    }
+    
+    Ok(())
+}
     
     pub fn compile_statement(&mut self, stmt: &Statement) -> Result<String, String> {
         match stmt {
