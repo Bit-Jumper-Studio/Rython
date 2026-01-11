@@ -1,18 +1,18 @@
 use std::path::Path;
 use crate::parser::parse_program;
-use crate::compiler::{RythonCompiler, CompilerConfig, CompilationResult};
+use crate::compiler::{EarthngCompiler, CompilerConfig};
 use crate::rcl_compiler::{RclCompiler, RclAssemblyGenerator};
 
 // Update the import
 use crate::backend::Target;
 
 /// Extended Rython compiler with RCL support
-pub struct RythonCompilerWithRcl {
+pub struct EarthngCompilerWithRcl {
     base_config: CompilerConfig,
     rcl_mode: bool,
 }
 
-impl RythonCompilerWithRcl {
+impl EarthngCompilerWithRcl {
     pub fn new(config: CompilerConfig) -> Self {
         Self {
             base_config: config,
@@ -29,7 +29,7 @@ impl RythonCompilerWithRcl {
             println!("[RCL] Compiling with RCL support...");
         }
         
-        let mut base_compiler = RythonCompiler::new(self.base_config.clone());
+        let mut base_compiler = EarthngCompiler::new(self.base_config.clone());
         base_compiler.config.enable_rcl = true;
         
         // Use the new compile_to_file method
@@ -61,7 +61,7 @@ pub fn compile_with_rcl(source: &str, output_path: &str, target: Target) -> Resu
         code_size_limit: None,
     };
     
-    let mut compiler = RythonCompiler::new(config);
+    let mut compiler = EarthngCompiler::new(config);
     compiler.compile_to_file(source, output_path)
 }
 

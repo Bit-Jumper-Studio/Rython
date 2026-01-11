@@ -1,0 +1,2 @@
+local = hi
+print("hi")

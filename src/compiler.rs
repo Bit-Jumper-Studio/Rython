@@ -79,7 +79,7 @@ pub struct CompilationStats {
     pub compilation_time_ms: u128,
 }
 
-pub struct RythonCompiler {
+pub struct EarthngCompiler {
     pub config: CompilerConfig,
     backend_registry: BackendRegistry,
     hardware_dsl: Option<HardwareDSL>,
@@ -104,7 +104,7 @@ pub trait OptimizationPass {
     fn optimize(&self, program: &mut Program) -> Result<(), String>;
 }
 
-impl RythonCompiler {
+impl EarthngCompiler {
     pub fn new(config: CompilerConfig) -> Self {
         let mut compiler = Self {
             config,
@@ -598,7 +598,7 @@ impl OptimizationPass for InlineExpansionPass {
 /// Main compilation function
 pub fn compile(source: &str, target: Target) -> Result<CompilationResult, String> {
     let config = CompilerConfig::default().with_target(target);
-    let mut compiler = RythonCompiler::new(config);
+    let mut compiler = EarthngCompiler::new(config);
     compiler.compile(source)
 }
 
@@ -608,13 +608,13 @@ pub fn compile_with_hardware(source: &str, target: Target) -> Result<Compilation
         .with_target(target)
         .with_hardware_dsl(true);
     
-    let mut compiler = RythonCompiler::new(config);
+    let mut compiler = EarthngCompiler::new(config);
     compiler.compile(source)
 }
 
 /// Compile with custom configuration
 pub fn compile_with_config(source: &str, config: CompilerConfig) -> Result<CompilationResult, String> {
-    let mut compiler = RythonCompiler::new(config);
+    let mut compiler = EarthngCompiler::new(config);
     compiler.compile(source)
 }
 

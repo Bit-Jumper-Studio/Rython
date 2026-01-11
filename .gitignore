@@ -1,9 +1,3 @@
-# Parser output
-rython/parser/parser.out
-rython/parser/parsetab.py
-rython/parser/*.out
-rython/parser/parsetab.*
-
 *.pyc
 *.so
 *.pyd
@@ -19,7 +13,7 @@ tests
 test/bin
 test/lib 
 test/include
-test/rython
 
 test/*.bin
 test/*.ry
+test/earthang

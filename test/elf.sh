@@ -1,0 +1,1 @@
+./rython compile hello.ry --target linux64 --output hello.asm

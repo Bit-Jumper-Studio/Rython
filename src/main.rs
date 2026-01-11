@@ -1,4 +1,4 @@
-use rython::cli;
+use earthang::cli;
 
 fn main() {
     if let Err(e) = cli::run() {

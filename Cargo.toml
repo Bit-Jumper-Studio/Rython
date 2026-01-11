@@ -1,10 +1,10 @@
 [package]
-name = "rython"
-version = "0.0.1"
-description = ""
+name = "earthang"
+version = "0.3.9-a"
+description = "Earthang Language"
 authors = ["BIt Jumper Studio"]
 license = "MIT"
-repository = "https://github.com/Bit-Jumper-Studio/Rython"
+repository = "https://github.com/Bit-Jumper-Studio/Earthang"
 readme = "README.md"
 keywords = ["compiler", "bootloader", "assembly", "bios", "uefi", "low-level"]
 categories = ["command-line-utilities", "development-tools", "systems-programming"]
@@ -13,11 +13,10 @@ edition = "2021"
 [dependencies]
 clap = { version = "4.0", features = ["derive"] }
 colored = "2.0"
+mlua = { version = "0.11.5", features = ["lua54", "vendored", "async"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-
-# Remove the [features] section entirely since we don't need conditional compilation
-# Or keep it simple if you really want features:
+chrono = "0.4"
 
 [features]
 default = ["bios"]
