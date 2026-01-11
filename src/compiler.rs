@@ -140,106 +140,119 @@ impl EarthngCompiler {
     }
     
     pub fn compile(&mut self, source: &str) -> Result<CompilationResult, String> {
-        let start_time = std::time::Instant::now();
-        
-        // Clear previous state
-        self.warnings.clear();
-        self.errors.clear();
-        self.symbol_table.clear();
-        
-        // Parse the source code
-        let mut program = match crate::parser::parse_program(source) {
-            Ok(program) => program,
-            Err(parse_errors) => {
-                let error_messages: Vec<String> = parse_errors
-                    .iter()
-                    .map(|e| e.to_string())
-                    .collect();
-                return Err(format!("Parse errors:\n{}", error_messages.join("\n")));
-            }
-        };
-        
-        // Apply optimizations if enabled
-        if self.config.optimize {
-            for pass in &self.optimization_passes {
-                if let Err(err) = pass.optimize(&mut program) {
-                    self.warnings.push(format!("Optimization pass '{}' failed: {}", pass.name(), err));
-                }
+    let start_time = std::time::Instant::now();
+    
+    // Clear previous state
+    self.warnings.clear();
+    self.errors.clear();
+    self.symbol_table.clear();
+    
+    // FIX: Use the Lua frontend parser instead of the old parser
+    let mut program = match crate::lua_frontend::parse_program(source) {
+        Ok(program) => program,
+        Err(parse_errors) => {
+            let error_messages: Vec<String> = parse_errors
+                .iter()
+                .map(|e| e.format_error(source))
+                .collect();
+            return Err(format!("Parse errors:\n{}", error_messages.join("\n")));
+        }
+    };
+    
+    // Apply optimizations if enabled
+    if self.config.optimize {
+        for pass in &self.optimization_passes {
+            if let Err(err) = pass.optimize(&mut program) {
+                self.warnings.push(format!("Optimization pass '{}' failed: {}", pass.name(), err));
             }
         }
-        
-        // Collect hardware DSL information if enabled
-        let hardware_asm = if self.config.hardware_dsl_enabled {
-            // Take ownership of the DSL to avoid borrowing issues
-            let mut dsl = self.hardware_dsl.take();
-            if let Some(ref mut dsl_ref) = dsl {
-                let result = self.collect_hardware_intrinsics(&program, dsl_ref);
-                // Put the DSL back
-                self.hardware_dsl = dsl;
-                result?
-            } else {
-                Vec::new()
-            }
+    }
+    
+    // Collect hardware DSL information if enabled
+    let hardware_asm = if self.config.hardware_dsl_enabled {
+        // Take ownership of the DSL to avoid borrowing issues
+        let mut dsl = self.hardware_dsl.take();
+        if let Some(ref mut dsl_ref) = dsl {
+            let result = self.collect_hardware_intrinsics(&program, dsl_ref);
+            // Put the DSL back
+            self.hardware_dsl = dsl;
+            result?
         } else {
             Vec::new()
-        };
+        }
+    } else {
+        Vec::new()
+    };
+    
+    // Create backend module with requirements
+    let backend_module = self.create_backend_module(&program, hardware_asm);
+    
+    // Clone what we need to avoid borrow checker issues
+    let target = self.config.target;
+    let use_backend_registry = matches!(
+        target,
+        Target::Bios16 | Target::Bios32 | Target::Bios64 | 
+        Target::Bios64Sse | Target::Bios64Avx | Target::Bios64Avx512
+    );
+    
+    // Compile with appropriate backend based on target
+    let assembly = if use_backend_registry {
+        // For BIOS targets, find backend from registry
+        let backend_found = self.backend_registry.find_backend(&backend_module);
         
-        // Create backend module with requirements
-        let backend_module = self.create_backend_module(&program, hardware_asm);
-        
-        // Clone what we need to avoid borrow checker issues
-        let target = self.config.target;
-        let use_backend_registry = matches!(
-            target,
-            Target::Bios16 | Target::Bios32 | Target::Bios64 | 
-            Target::Bios64Sse | Target::Bios64Avx | Target::Bios64Avx512
-        );
-        
-        // Compile with appropriate backend based on target
-        let assembly = if use_backend_registry {
-            // For BIOS targets, find backend from registry
-            let backend_found = self.backend_registry.find_backend(&backend_module);
-            
-            match backend_found {
-                Some(_backend) => {
-                    // Clone the module to pass to compile_with_backend
-                    let module_clone = backend_module.clone();
-                    self.compile_with_backend(&program, &module_clone)
-                }
-                None => {
-                    let caps = backend_module.required_capabilities.iter()
-                        .map(|c| format!("{:?}", c))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    return Err(format!("No backend found that supports all required capabilities: {}", caps));
-                }
+        match backend_found {
+            Some(_backend) => {
+                // Clone the module to pass to compile_with_backend
+                let module_clone = backend_module.clone();
+                self.compile_with_backend(&program, &module_clone)
             }
-        } else {
-            // For Linux64/Windows64, use emitter
-            self.compile_with_emitter(&program)
-        }?;
-        
-        let compilation_time = start_time.elapsed().as_millis();
-        
-        // Calculate statistics
-        let stats = CompilationStats {
-            lines_of_code: source.lines().count(),
-            assembly_lines: assembly.lines().count(),
-            variables_allocated: self.symbol_table.len(),
-            functions_compiled: program.body.iter()
-                .filter(|stmt| matches!(stmt, Statement::FunctionDef { .. }))
-                .count(),
-            hardware_intrinsics: backend_module.external_asm.len(),
-            compilation_time_ms: compilation_time,
-        };
-        
-        Ok(CompilationResult {
-            assembly,
-            warnings: self.warnings.clone(),
-            errors: self.errors.clone(),
-            stats,
-        })
-    }
+            None => {
+                let caps = backend_module.required_capabilities.iter()
+                    .map(|c| format!("{:?}", c))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!("No backend found that supports all required capabilities: {}", caps));
+            }
+        }
+    } else {
+        // For Linux64/Windows64, use the backend directly
+        match self.config.target {
+            Target::Linux64 => {
+                let mut backend = crate::backend::Linux64Backend::new();
+                backend.compile_program(&program)
+            }
+            Target::Windows64 => {
+                let mut backend = crate::backend::Windows64Backend::new();
+                backend.compile_program(&program)
+            }
+            _ => {
+                // For other targets, use emitter
+                self.compile_with_emitter(&program)
+            }
+        }
+    }?;
+    
+    let compilation_time = start_time.elapsed().as_millis();
+    
+    // Calculate statistics
+    let stats = CompilationStats {
+        lines_of_code: source.lines().count(),
+        assembly_lines: assembly.lines().count(),
+        variables_allocated: self.symbol_table.len(),
+        functions_compiled: program.body.iter()
+            .filter(|stmt| matches!(stmt, Statement::FunctionDef { .. }))
+            .count(),
+        hardware_intrinsics: backend_module.external_asm.len(),
+        compilation_time_ms: compilation_time,
+    };
+    
+    Ok(CompilationResult {
+        assembly,
+        warnings: self.warnings.clone(),
+        errors: self.errors.clone(),
+        stats,
+    })
+}
     
     fn compile_with_emitter(&mut self, program: &Program) -> Result<String, String> {
         let mut emitter = NasmEmitter::new();

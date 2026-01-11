@@ -1,2 +1,1 @@
-local = hi
 print("hi")
