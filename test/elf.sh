@@ -1,1 +1,1 @@
-./rython compile hello.ry --target linux64 --output hello.asm
+./earthang compile hello.lua --target bios64 --output hello.asm

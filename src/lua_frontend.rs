@@ -331,7 +331,7 @@ impl LuaFrontend {
         
         // Define the Lua parser script
         let parser_script = r#"
--- Lua-based Rython Parser
+-- Lua-based Earthang Parser
 local parser = {}
 
 -- Token types

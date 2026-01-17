@@ -20,7 +20,7 @@ impl CompactBootloader {
         // BIOS parameter block (BPB)
         code.extend_from_slice(&[
             0xEB, 0x3C, 0x90,                         // Jump to boot code
-            0x52, 0x79, 0x74, 0x68, 0x6F, 0x6E,       // "Rython" OEM
+            0x52, 0x79, 0x74, 0x68, 0x6F, 0x6E,       // "Earthang" OEM
             0x20, 0x20, 0x20,
             0x00, 0x02,                               // Bytes per sector
             0x01,                                     // Sectors per cluster
@@ -76,7 +76,7 @@ impl CompactBootloader {
             
             // Message
             0x52, 0x79, 0x74, 0x68, 0x6F, 0x6E, 0x20, 0x42, 0x6F, 0x6F,
-            0x74, 0x6C, 0x6F, 0x61, 0x64, 0x65, 0x72, 0x00, // "Rython Bootloader"
+            0x74, 0x6C, 0x6F, 0x61, 0x64, 0x65, 0x72, 0x00, // "Earthang Bootloader"
         ]);
         
         // Pad to 510 bytes
@@ -245,7 +245,7 @@ impl ModeTransitionEmitter {
         code.push(0xAA);
         
         // Add string data AFTER boot signature (at 0x7E00)
-        let string_data = b"Rython Bootloader\0";
+        let string_data = b"Earthang Bootloader\0";
         code.extend_from_slice(string_data);
         
         Ok(code)
@@ -495,7 +495,7 @@ pub fn create_hello_bootloader() -> Vec<u8> {
         0x8E, 0xC0,                               // mov es, ax
         0xBF, 0x00, 0x00,                         // mov di, 0x0000
         
-        // "Hello, Rython!"
+        // "Hello, Earthang!"
         0xB0, 0x48, 0xAB,                         // mov al, 'H'; stosw
         0xB0, 0x65, 0xAB,                         // mov al, 'e'; stosw
         0xB0, 0x6C, 0xAB,                         // mov al, 'l'; stosw

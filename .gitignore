@@ -8,12 +8,4 @@ dist
 build_py
 __pycache__
 
-tests
-
-test/bin
-test/lib 
-test/include
-
-test/*.bin
-test/*.ry
-test/earthang
+test

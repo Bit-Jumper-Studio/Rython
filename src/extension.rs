@@ -73,21 +73,6 @@ impl AssemblyEmitter for BasicAssemblyEmitter {
                 asm.push_str(&format!("    call {}\n", func));
                 asm
             }
-            Target::Windows64 => {
-                // Windows x64 calling convention: rcx, rdx, r8, r9
-                let mut asm = String::new();
-                for (i, arg) in args.iter().enumerate() {
-                    match i {
-                        0 => asm.push_str(&format!("    mov rcx, {}\n", arg)),
-                        1 => asm.push_str(&format!("    mov rdx, {}\n", arg)),
-                        2 => asm.push_str(&format!("    mov r8, {}\n", arg)),
-                        3 => asm.push_str(&format!("    mov r9, {}\n", arg)),
-                        _ => asm.push_str(&format!("    mov [rsp+{}], {}\n", (i - 4) * 8, arg)),
-                    }
-                }
-                asm.push_str(&format!("    call {}\n", func));
-                asm
-            }
             Target::Bios64 => {
                 // BIOS calling convention for our system
                 let mut asm = String::new();
@@ -152,11 +137,6 @@ impl ExtensionRegistry {
             }
         }
         None
-    }
-    
-    /// Get all registered modules
-    pub fn modules(&self) -> &[Box<dyn EarthngModule>] {
-        &self.modules
     }
     
     /// Check if a function is available in any module
@@ -376,10 +356,6 @@ impl EarthngModule for SystemModule {
                         asm.push_str("    mov rdi, 0          ; exit code\n");
                         asm.push_str("    syscall\n");
                     }
-                    Target::Windows64 => {
-                        asm.push_str("    mov rcx, 0          ; exit code\n");
-                        asm.push_str("    call ExitProcess\n");
-                    }
                     _ => {
                         asm.push_str("    ; Exit not implemented for this target\n");
                         asm.push_str("    hlt\n");
@@ -404,8 +380,6 @@ impl EarthngModule for SystemModule {
         // System module might check for specific capabilities
         if capabilities.contains(&Capability::Linux) {
             // Linux-specific initialization
-        } else if capabilities.contains(&Capability::Windows) {
-            // Windows-specific initialization
         }
     }
 }

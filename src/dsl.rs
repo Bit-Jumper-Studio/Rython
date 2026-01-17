@@ -835,7 +835,7 @@ pub fn init_hardware_dsl() -> HardwareDSL {
 }
 
 pub fn compile_with_hardware(source: &str, target: crate::backend::Target) -> Result<String, String> {
-    // Parse regular Rython code
+    // Parse regular Earthang code
     let program = crate::parser::parse_program(source)
         .map_err(|e| format!("Parse error: {:?}", e))?;
     

@@ -1,11 +1,10 @@
 use std::collections::HashMap;
-use crate::parser::{Program, Statement, Expr, Op}; 
+use crate::parser::{Program, Statement, Expr}; 
 
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TargetPlatform {
     Linux64,
-    Windows64,  
     Bios16,
     Bios32,
     Bios64,
@@ -24,7 +23,6 @@ pub struct TargetConfig {
 
 impl TargetConfig {
     pub fn linux64() -> Self { Self { platform: TargetPlatform::Linux64, bits: 64, format: "elf64", entry_point: "_start" } }
-    pub fn windows64() -> Self { Self { platform: TargetPlatform::Windows64, bits: 64, format: "win64", entry_point: "main" } }
     pub fn bios16() -> Self { Self { platform: TargetPlatform::Bios16, bits: 16, format: "bin", entry_point: "_start" } }
     pub fn bios32() -> Self { Self { platform: TargetPlatform::Bios32, bits: 32, format: "bin", entry_point: "_start" } }
     pub fn bios64() -> Self { Self { platform: TargetPlatform::Bios64, bits: 64, format: "bin", entry_point: "_start" } }
@@ -32,7 +30,6 @@ impl TargetConfig {
     pub fn bios64_avx() -> Self { Self { platform: TargetPlatform::Bios64AVX, bits: 64, format: "bin", entry_point: "_start" } }
     pub fn bios64_avx512() -> Self { Self { platform: TargetPlatform::Bios64AVX512, bits: 64, format: "bin", entry_point: "_start" } }
     
-    pub fn is_windows(&self) -> bool { self.platform == TargetPlatform::Windows64 }
     pub fn is_bios(&self) -> bool {
         matches!(self.platform, TargetPlatform::Bios16 | TargetPlatform::Bios32 | 
                  TargetPlatform::Bios64 | TargetPlatform::Bios64SSE |
@@ -47,7 +44,7 @@ pub struct NasmEmitter {
     label_counter: u32,
     variable_offsets: HashMap<String, i32>,
     byte_counter: ByteCounter,
-    string_literals: HashMap<String, String>, // Maps Rython string to NASM label
+    string_literals: HashMap<String, String>, // Maps Earthang string to NASM label
     data_labels: Vec<String>, // Track data section labels
 }
 
@@ -65,7 +62,6 @@ impl NasmEmitter {
     
     // Target configuration methods
     pub fn set_target_linux(&mut self) { self.target = TargetConfig::linux64(); }
-    pub fn set_target_windows(&mut self) { self.target = TargetConfig::windows64(); }
     pub fn set_target_bios16(&mut self) { self.target = TargetConfig::bios16(); }
     pub fn set_target_bios32(&mut self) { self.target = TargetConfig::bios32(); }
     pub fn set_target_bios64(&mut self) { self.target = TargetConfig::bios64(); }
@@ -210,122 +206,10 @@ impl NasmEmitter {
         }
     }
     
-    fn compile_windows64(&mut self, program: &Program) -> Result<String, String> {
-        let var_count = self.count_variables(program);
-        let stack_space = 32 + (var_count * 8); // Shadow space + variables
-        
-        let mut code = String::new();
-        
-        code.push_str("; Rython Windows 64-bit Executable\n");
-        code.push_str("; Format: Win64 (PE executable)\n\n");
-        
-        // Define sections for PE executable
-        code.push_str("section .text\n");
-        code.push_str("    bits 64\n");
-        code.push_str("    default rel\n\n"); // RIP-relative addressing by default
-        
-        // Entry point for Windows (will be called by CRT)
-        code.push_str("global main\n");
-        
-        // Import external functions from Windows DLLs
-        code.push_str("extern GetStdHandle\n");
-        code.push_str("extern WriteConsoleA\n");
-        code.push_str("extern ExitProcess\n");
-        code.push_str("extern printf\n");
-        code.push_str("extern puts\n");
-        code.push_str("extern strlen\n\n");
-        
-        // Main function
-        code.push_str("main:\n");
-        code.push_str("    push rbp\n");
-        code.push_str("    mov rbp, rsp\n");
-        code.push_str(&format!("    sub rsp, {}          ; Allocate shadow space + variable space\n", stack_space));
-        code.push_str("    and rsp, -16         ; Align stack to 16 bytes (Windows requirement)\n\n");
-        
-        // Compile program statements
-        self.compile_windows64_statements(&mut code, &program.body)?;
-        
-        // Exit with success code
-        code.push_str("    xor eax, eax         ; Return 0\n");
-        code.push_str("    leave\n");
-        code.push_str("    ret\n\n");
-        
-        // Windows helper functions
-        code.push_str("; ========== WINDOWS HELPERS ==========\n\n");
-        
-        // Print string using WriteConsole
-        code.push_str("win_print:\n");
-        code.push_str("    ; RDI = string pointer\n");
-        code.push_str("    push rdi\n");
-        code.push_str("    push rsi\n");
-        code.push_str("    push rdx\n");
-        code.push_str("    push rcx\n");
-        code.push_str("    push r8\n");
-        code.push_str("    push r9\n");
-        code.push_str("    sub rsp, 40\n");
-        code.push_str("    \n");
-        code.push_str("    ; Get stdout handle\n");
-        code.push_str("    mov rcx, -11         ; STD_OUTPUT_HANDLE\n");
-        code.push_str("    call GetStdHandle\n");
-        code.push_str("    mov rdx, rax        ; hConsoleOutput\n");
-        code.push_str("    \n");
-        code.push_str("    ; Calculate string length\n");
-        code.push_str("    mov rcx, rdi\n");
-        code.push_str("    call strlen\n");
-        code.push_str("    \n");
-        code.push_str("    ; Write to console\n");
-        code.push_str("    mov rcx, rdx        ; hConsoleOutput\n");
-        code.push_str("    mov rdx, rdi        ; lpBuffer\n");
-        code.push_str("    mov r8, rax         ; nNumberOfCharsToWrite\n");
-        code.push_str("    lea r9, [rsp+80]    ; lpNumberOfCharsWritten\n");
-        code.push_str("    mov qword [rsp+32], 0 ; lpReserved\n");
-        code.push_str("    call WriteConsoleA\n");
-        code.push_str("    \n");
-        code.push_str("    add rsp, 40\n");
-        code.push_str("    pop r9\n");
-        code.push_str("    pop r8\n");
-        code.push_str("    pop rcx\n");
-        code.push_str("    pop rdx\n");
-        code.push_str("    pop rsi\n");
-        code.push_str("    pop rdi\n");
-        code.push_str("    ret\n\n");
-        
-        // Print number using printf
-        code.push_str("win_print_number:\n");
-        code.push_str("    ; RDI = number\n");
-        code.push_str("    push rdi\n");
-        code.push_str("    push rsi\n");
-        code.push_str("    sub rsp, 40\n");
-        code.push_str("    \n");
-        code.push_str("    lea rcx, [win_fmt_int]\n");
-        code.push_str("    mov rdx, rdi\n");
-        code.push_str("    xor rax, rax        ; No floating point args\n");
-        code.push_str("    call printf\n");
-        code.push_str("    \n");
-        code.push_str("    add rsp, 40\n");
-        code.push_str("    pop rsi\n");
-        code.push_str("    pop rdi\n");
-        code.push_str("    ret\n\n");
-        
-        // Data section for Windows
-        code.push_str("section .data\n");
-        
-        // Format strings
-        code.push_str("win_fmt_int: db '%d', 10, 0   ; %%d + newline + null\n");
-        code.push_str("win_fmt_str: db '%s', 0\n");
-        
-        // String literals
-        for (string, label) in &self.string_literals {
-            code.push_str(&format!("{}: db '{}', 0\n", label, string));
-        }
-        
-        Ok(code)
-    }
-    
     fn compile_linux64(&mut self, program: &Program) -> Result<String, String> {
     let mut code = String::new();
     
-    code.push_str("; Rython Linux 64-bit Executable\n");
+    code.push_str("; Earthang Linux 64-bit Executable\n");
     code.push_str("; Format: ELF64\n\n");
     
     code.push_str("section .text\n");
@@ -401,252 +285,6 @@ impl NasmEmitter {
     Ok(code)
 }
     
-    fn compile_windows64_statements(&mut self, code: &mut String, statements: &[Statement]) -> Result<(), String> {
-        for stmt in statements {
-            match stmt {
-                Statement::Expr(expr) => {
-                    let expr_code = self.compile_windows64_expression_to_string(expr)?;
-                    code.push_str(&expr_code);
-                }
-                Statement::VarDecl { name, value, .. } => {
-                    // Allocate space for variable
-                    let offset = self.allocate_variable(name);
-                    
-                    code.push_str("    ; var ");
-                    code.push_str(name);
-                    code.push_str(" = \n");
-                    
-                    // Compile the value
-                    let expr_code = self.compile_windows64_expression_to_string(value)?;
-                    code.push_str(&expr_code);
-                    
-                    // Store value at [rbp - offset]
-                    code.push_str(&format!("    mov [rbp - {}], rax\n", offset));
-                }
-                Statement::Assign { target, value, .. } => {
-                    // Get variable offset (allocate if not exists)
-                    let offset = if let Some(offset) = self.get_variable_offset(target) {
-                        offset
-                    } else {
-                        self.allocate_variable(target)
-                    };
-                    
-                    code.push_str("    ; ");
-                    code.push_str(target);
-                    code.push_str(" = \n");
-                    
-                    // Compile the value
-                    let expr_code = self.compile_windows64_expression_to_string(value)?;
-                    code.push_str(&expr_code);
-                    
-                    // Store value at [rbp - offset]
-                    code.push_str(&format!("    mov [rbp - {}], rax\n", offset));
-                }
-                Statement::FunctionDef { name, args: params, body, .. } => {
-                    code.push_str(&format!("\n{}:\n", name));
-                    code.push_str("    push rbp\n");
-                    code.push_str("    mov rbp, rsp\n");
-                    
-                    // Allocate space for parameters
-                    let param_space = params.len() * 8;
-                    code.push_str(&format!("    sub rsp, {}\n", param_space + 32));
-                    
-                    // Store parameters
-                    for (i, param) in params.iter().enumerate() {
-                        let offset = (i as i32 + 1) * 8;
-                        self.variable_offsets.insert(param.clone(), offset);
-                    }
-                    
-                    // Compile function body
-                    self.compile_windows64_statements(code, body)?;
-                    
-                    code.push_str("    leave\n");
-                    code.push_str("    ret\n\n");
-                }
-                Statement::Return(value) => {
-                    if let Some(expr) = value {
-                        let expr_code = self.compile_windows64_expression_to_string(expr)?;
-                        code.push_str(&expr_code);
-                    }
-                    code.push_str("    leave\n");
-                    code.push_str("    ret\n");
-                }
-                Statement::If { condition, then_block, elif_blocks, else_block, .. } => {
-                    let else_label = self.new_label("else");
-                    let end_label = self.new_label("endif");
-                    
-                    // Compile condition
-                    let cond_code = self.compile_windows64_expression_to_string(condition)?;
-                    code.push_str(&cond_code);
-                    code.push_str("    test rax, rax\n");
-                    code.push_str(&format!("    jz {}\n", else_label));
-                    
-                    // Compile then block
-                    for stmt in then_block {
-                        if let Statement::Expr(expr) = stmt {
-                            let expr_code = self.compile_windows64_expression_to_string(expr)?;
-                            code.push_str(&expr_code);
-                        }
-                    }
-                    code.push_str(&format!("    jmp {}\n", end_label));
-                    
-                    // Compile elif blocks
-                    code.push_str(&format!("{}:\n", else_label));
-                    for (elif_cond, elif_block) in elif_blocks {
-                        let elif_label = self.new_label("elif");
-                        let cond_code = self.compile_windows64_expression_to_string(elif_cond)?;
-                        code.push_str(&cond_code);
-                        code.push_str("    test rax, rax\n");
-                        code.push_str(&format!("    jz {}\n", elif_label));
-                        
-                        for stmt in elif_block {
-                            if let Statement::Expr(expr) = stmt {
-                                let expr_code = self.compile_windows64_expression_to_string(expr)?;
-                                code.push_str(&expr_code);
-                            }
-                        }
-                        code.push_str(&format!("    jmp {}\n", end_label));
-                        code.push_str(&format!("{}:\n", elif_label));
-                    }
-                    
-                    // Compile else block
-                    if let Some(else_block) = else_block {
-                        for stmt in else_block {
-                            if let Statement::Expr(expr) = stmt {
-                                let expr_code = self.compile_windows64_expression_to_string(expr)?;
-                                code.push_str(&expr_code);
-                            }
-                        }
-                    }
-                    
-                    code.push_str(&format!("{}:\n", end_label));
-                }
-                _ => {
-                    code.push_str("    ; [Unsupported statement type]\n");
-                }
-            }
-        }
-        Ok(())
-    }
-    
-    fn compile_windows64_expression_to_string(&mut self, expr: &Expr) -> Result<String, String> {
-        let mut code = String::new();
-        self.compile_windows64_expression(&mut code, expr)?;
-        Ok(code)
-    }
-    
-    fn compile_windows64_expression(&mut self, code: &mut String, expr: &Expr) -> Result<(), String> {
-        match expr {
-            Expr::Number(n, _) => {
-                code.push_str(&format!("    ; Number: {}\n", n));
-                code.push_str(&format!("    mov rax, {}\n", n));
-            }
-            Expr::String(s, _) => {
-                if let Some(label) = self.string_literals.get(s) {
-                    code.push_str(&format!("    ; String: '{}'\n", s));
-                    code.push_str(&format!("    lea rax, [{}]\n", label));
-                } else {
-                    return Err(format!("String literal '{}' not found in data section", s));
-                }
-            }
-            Expr::Var(name, _) => {
-                let offset = self.get_variable_offset(name)
-                    .ok_or_else(|| format!("Undefined variable: {}", name))?;
-                
-                code.push_str(&format!("    ; Variable: {}\n", name));
-                code.push_str(&format!("    mov rax, [rbp - {}]\n", offset));
-            }
-            Expr::Call { func, args, kwargs: _, span: _ } => {
-                // Handle print function specially
-                if func == "print" {
-                    if let Some(arg) = args.get(0) {
-                        // Compile the argument first
-                        self.compile_windows64_expression(code, arg)?;
-                        
-                        if matches!(arg, Expr::String(_, _) | Expr::Var(_, _)) {
-                            // String or variable (could be string)
-                            code.push_str("    mov rdx, rax          ; Second arg: string address\n");
-                            code.push_str("    lea rcx, [win_fmt_str] ; First arg: format string\n");
-                            code.push_str("    sub rsp, 32          ; Allocate shadow space\n");
-                            code.push_str("    xor rax, rax          ; No floating point args\n");
-                            code.push_str("    call printf\n");
-                            code.push_str("    add rsp, 32          ; Clean up shadow space\n");
-                        } else {
-                            // Number
-                            code.push_str("    mov rdx, rax          ; Second arg: number\n");
-                            code.push_str("    lea rcx, [win_fmt_int] ; First arg: format string\n");
-                            code.push_str("    sub rsp, 32          ; Allocate shadow space\n");
-                            code.push_str("    xor rax, rax          ; No floating point args\n");
-                            code.push_str("    call printf\n");
-                            code.push_str("    add rsp, 32          ; Clean up shadow space\n");
-                        }
-                    } else {
-                        code.push_str("    ; Empty print\n");
-                    }
-                } else {
-                    // Regular function call
-                    // Windows calling convention: rcx, rdx, r8, r9, then stack
-                    for (i, arg) in args.iter().enumerate() {
-                        self.compile_windows64_expression(code, arg)?;
-                        match i {
-                            0 => code.push_str("    mov rcx, rax\n"),
-                            1 => code.push_str("    mov rdx, rax\n"),
-                            2 => code.push_str("    mov r8, rax\n"),
-                            3 => code.push_str("    mov r9, rax\n"),
-                            _ => {
-                                code.push_str("    push rax\n");
-                            }
-                        }
-                    }
-                    code.push_str(&format!("    call {}\n", func));
-                    // Clean up stack if more than 4 args
-                    if args.len() > 4 {
-                        code.push_str(&format!("    add rsp, {}\n", (args.len() - 4) * 8));
-                    }
-                }
-            }
-            Expr::BinOp { left, op, right, .. } => {
-                // Compile left side
-                self.compile_windows64_expression(code, left)?;
-                code.push_str("    push rax\n");
-                
-                // Compile right side
-                self.compile_windows64_expression(code, right)?;
-                code.push_str("    mov rbx, rax\n");
-                code.push_str("    pop rax\n");
-                
-                match op {
-                    Op::Add => code.push_str("    add rax, rbx\n"),
-                    Op::Sub => code.push_str("    sub rax, rbx\n"),
-                    Op::Mul => code.push_str("    imul rax, rbx\n"),
-                    Op::Div => {
-                        code.push_str("    xor rdx, rdx\n");
-                        code.push_str("    idiv rbx\n");
-                    }
-                    _ => return Err(format!("Unsupported operator: {:?}", op)),
-                }
-            }
-            Expr::Boolean(b, _) => {
-                code.push_str(&format!("    ; Boolean: {}\n", b));
-                code.push_str(&format!("    mov rax, {}\n", if *b { 1 } else { 0 }));
-            }
-            Expr::Float(f, _) => {
-                code.push_str(&format!("    ; Float: {}\n", f));
-                code.push_str("    ; Float support not implemented\n");
-                code.push_str("    mov rax, 0\n");
-            }
-            Expr::None(_) => {
-                code.push_str("    ; None\n");
-                code.push_str("    xor rax, rax\n");
-            }
-            _ => {
-                code.push_str("    ; [Unsupported expression type]\n");
-                code.push_str("    xor rax, rax\n");
-            }
-        }
-        Ok(())
-    }
-    
     fn compile_linux64_statements(&mut self, code: &mut String, statements: &[Statement]) -> Result<(), String> {
         for stmt in statements {
             match stmt {
@@ -709,7 +347,7 @@ impl NasmEmitter {
     }
     
     fn compile_bios16(&mut self, code: &mut String, program: &Program) -> Result<(), String> {
-        code.push_str("; Rython 16-bit Bootloader\n\n");
+        code.push_str("; Earthang 16-bit Bootloader\n\n");
         code.push_str("    org 0x7C00\n");
         code.push_str("    bits 16\n\n");
         code.push_str("start:\n");
@@ -774,15 +412,15 @@ impl NasmEmitter {
         code.push_str("    dw 0xAA55\n\n");
         
         // String data AFTER boot sector
-        code.push_str("    ; String data at 0x7E00\n");
+        code.push_str("    ; String data at 0x7E00 (after boot sector)\n");
         code.push_str("    times 512 db 0  ; Boot sector padding\n");
-        code.push_str("    db 'Rython 16-bit', 0\n");
+        code.push_str("    db 'Earthang 16-bit', 0\n");
         
         Ok(())
     }
     
     fn compile_bios32(&mut self, code: &mut String, program: &Program) -> Result<(), String> {
-        code.push_str("; Rython 32-bit Bootloader\n\n");
+        code.push_str("; Earthang 32-bit Bootloader\n\n");
         code.push_str("    org 0x7C00\n");
         code.push_str("    bits 16\n\n");
         code.push_str("start:\n");
@@ -887,15 +525,15 @@ impl NasmEmitter {
         code.push_str("    dw 0xAA55\n\n");
         
         // String data AFTER boot sector
-        code.push_str("    ; String data at 0x7E00\n");
+        code.push_str("    ; String data at 0x7E00 (after boot sector)\n");
         code.push_str("    times 512 db 0  ; Boot sector padding\n");
-        code.push_str("    db 'Rython 32-bit', 0\n");
+        code.push_str("    db 'Earthang 32-bit', 0\n");
         
         Ok(())
     }
     
     fn compile_bios64(&mut self, code: &mut String, program: &Program) -> Result<(), String> {
-        code.push_str("; Rython 64-bit Bootloader - Fixed Version\n\n");
+        code.push_str("; Earthang 64-bit Bootloader - Fixed Version\n\n");
         code.push_str("    org 0x7C00\n");
         code.push_str("    bits 16\n\n");
         
@@ -1086,7 +724,7 @@ impl NasmEmitter {
         
         code.push_str("    ; String data at 0x7E00 (after boot sector)\n");
         code.push_str("    times 512 db 0  ; Boot sector padding\n");
-        code.push_str("    db 'Rython 64-bit', 0\n");
+        code.push_str("    db 'Earthang 64-bit', 0\n");
         
         Ok(())
     }
@@ -1259,7 +897,6 @@ impl NasmEmitter {
     
     fn compile_standard(&mut self, program: &Program) -> Result<String, String> {
         match self.target.platform {
-            TargetPlatform::Windows64 => self.compile_windows64(program),
             TargetPlatform::Linux64 => self.compile_linux64(program),
             _ => Err(format!("Unsupported platform for standard compilation: {:?}", self.target.platform))
         }

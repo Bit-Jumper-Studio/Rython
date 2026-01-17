@@ -2,7 +2,7 @@ version = 1
 
 test_patterns = ["tests/"]
 
-exclude_patterns = ["rython/jit/__rust__/target/"]
+exclude_patterns = ["Earthang/jit/__rust__/target/"]
 
 [[analyzers]]
 name = "python"

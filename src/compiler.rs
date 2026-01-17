@@ -1,3 +1,4 @@
+
 use std::collections::HashMap;
 use crate::parser::{Program, Statement, Expr};
 use crate::backend::{Backend, BackendRegistry, BackendModule, Target, Capability};
@@ -211,7 +212,6 @@ impl EarthangCompiler {
         
         match self.config.target {
             Target::Linux64 => emitter.set_target_linux(),
-            Target::Windows64 => emitter.set_target_windows(),
             Target::Bios16 => emitter.set_target_bios16(),
             Target::Bios32 => emitter.set_target_bios32(),
             Target::Bios64 => emitter.set_target_bios64(),
@@ -302,10 +302,6 @@ impl EarthangCompiler {
                     let mut backend = crate::backend::Linux64Backend::new();
                     backend.compile_program(&program)
                 }
-                Target::Windows64 => {
-                    let mut backend = crate::backend::Windows64Backend::new();
-                    backend.compile_program(&program)
-                }
                 _ => {
                     self.compile_with_emitter(&program)
                 }
@@ -340,7 +336,6 @@ impl EarthangCompiler {
         
         match self.config.target {
             Target::Linux64 => emitter.set_target_linux(),
-            Target::Windows64 => emitter.set_target_windows(),
             Target::Bios16 => emitter.set_target_bios16(),
             Target::Bios32 => emitter.set_target_bios32(),
             Target::Bios64 => emitter.set_target_bios64(),
@@ -381,7 +376,6 @@ impl EarthangCompiler {
             _ => {
                 let mut backend_copy: Box<dyn Backend> = match self.config.target {
                     Target::Linux64 => Box::new(crate::backend::Linux64Backend::new()),
-                    Target::Windows64 => Box::new(crate::backend::Windows64Backend::new()),
                     _ => return Err(format!("Unsupported target for backend compilation: {:?}", self.config.target)),
                 };
                 
@@ -426,10 +420,6 @@ impl EarthangCompiler {
                 required_capabilities.push(Capability::Linux);
                 required_capabilities.push(Capability::LongMode64);
                 required_capabilities.push(Capability::VirtualMemory);
-            }
-            Target::Windows64 => {
-                required_capabilities.push(Capability::Windows);
-                required_capabilities.push(Capability::LongMode64);
             }
         }
         
