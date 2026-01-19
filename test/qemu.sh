@@ -1,1 +1,0 @@
-env -i HOME=$HOME TERM=$TERM DISPLAY=$DISPLAY XAUTHORITY=$XAUTHORITY LD_LIBRARY_PATH=/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu /usr/bin/qemu-system-x86_64 -drive file=test.bin,format=raw -no-reboot -no-shutdown

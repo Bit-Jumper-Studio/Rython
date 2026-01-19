@@ -1,1 +1,0 @@
-./earthang compile hello.lua --target bios64 --output hello.asm

@@ -1,1 +1,0 @@
-Hello, if you are reading this, know that I gave up on the project and decided to focus on something
