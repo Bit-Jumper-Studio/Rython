@@ -1,6 +1,6 @@
 [package]
 name = "earthang"
-version = "0.3.9-a"
+version = "0.4.2-a"
 description = "Earthang Language"
 authors = ["BIt Jumper Studio"]
 license = "MIT"

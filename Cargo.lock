@@ -182,7 +182,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "earthang"
-version = "0.3.9-a"
+version = "0.4.2-a"
 dependencies = [
  "chrono",
  "clap",
