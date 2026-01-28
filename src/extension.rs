@@ -1,3 +1,16 @@
+/*
+    Copyright (C) 2026 Emanuel
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+*/
 use std::collections::HashMap;
 use crate::backend::{Target, Capability};
 use crate::parser::Expr;
@@ -52,44 +65,24 @@ impl BasicAssemblyEmitter {
 
 impl AssemblyEmitter for BasicAssemblyEmitter {
     fn emit_call(&mut self, func: &str, args: &[String]) -> String {
-        match self.target {
-            Target::Linux64 => {
-                // Linux x86_64 calling convention: rdi, rsi, rdx, rcx, r8, r9
-                let mut asm = String::new();
-                for (i, arg) in args.iter().enumerate() {
-                    match i {
-                        0 => asm.push_str(&format!("    mov rdi, {}\n", arg)),
-                        1 => asm.push_str(&format!("    mov rsi, {}\n", arg)),
-                        2 => asm.push_str(&format!("    mov rdx, {}\n", arg)),
-                        3 => asm.push_str(&format!("    mov rcx, {}\n", arg)),
-                        4 => asm.push_str(&format!("    mov r8, {}\n", arg)),
-                        5 => asm.push_str(&format!("    mov r9, {}\n", arg)),
-                        _ => asm.push_str(&format!("    push {}\n", arg)),
-                    }
-                }
-                if args.len() > 6 {
-                    asm.push_str(&format!("    ; {} stack args passed\n", args.len() - 6));
-                }
-                asm.push_str(&format!("    call {}\n", func));
-                asm
+        // Since we only have Linux64 target, remove the match
+        let mut asm = String::new();
+        for (i, arg) in args.iter().enumerate() {
+            match i {
+                0 => asm.push_str(&format!("    mov rdi, {}\n", arg)),
+                1 => asm.push_str(&format!("    mov rsi, {}\n", arg)),
+                2 => asm.push_str(&format!("    mov rdx, {}\n", arg)),
+                3 => asm.push_str(&format!("    mov rcx, {}\n", arg)),
+                4 => asm.push_str(&format!("    mov r8, {}\n", arg)),
+                5 => asm.push_str(&format!("    mov r9, {}\n", arg)),
+                _ => asm.push_str(&format!("    push {}\n", arg)),
             }
-            Target::Bios64 => {
-                // BIOS calling convention for our system
-                let mut asm = String::new();
-                for (i, arg) in args.iter().enumerate() {
-                    match i {
-                        0 => asm.push_str(&format!("    mov rax, {}\n", arg)),
-                        1 => asm.push_str(&format!("    mov rbx, {}\n", arg)),
-                        2 => asm.push_str(&format!("    mov rcx, {}\n", arg)),
-                        3 => asm.push_str(&format!("    mov rdx, {}\n", arg)),
-                        _ => asm.push_str(&format!("    ; arg{}: {}\n", i, arg)),
-                    }
-                }
-                asm.push_str(&format!("    call {}\n", func));
-                asm
-            }
-            _ => format!("    ; call {} - target not implemented\n", func),
         }
+        if args.len() > 6 {
+            asm.push_str(&format!("    ; {} stack args passed\n", args.len() - 6));
+        }
+        asm.push_str(&format!("    call {}\n", func));
+        asm
     }
     
     fn emit_reg_move(&mut self, src: &str, dst: &str) -> String {
@@ -350,17 +343,10 @@ impl EarthngModule for SystemModule {
         match func {
             "exit" => {
                 asm.push_str(&emitter.emit_comment("Exit program"));
-                match target {
-                    Target::Linux64 => {
-                        asm.push_str("    mov rax, 60         ; sys_exit\n");
-                        asm.push_str("    mov rdi, 0          ; exit code\n");
-                        asm.push_str("    syscall\n");
-                    }
-                    _ => {
-                        asm.push_str("    ; Exit not implemented for this target\n");
-                        asm.push_str("    hlt\n");
-                    }
-                }
+                // Since we only have Linux64 target, handle it directly
+                asm.push_str("    mov rax, 60         ; sys_exit\n");
+                asm.push_str("    mov rdi, 0          ; exit code\n");
+                asm.push_str("    syscall\n");
             }
             "time" => {
                 asm.push_str(&emitter.emit_comment("Get current time"));

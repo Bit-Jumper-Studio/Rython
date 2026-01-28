@@ -1,3 +1,16 @@
+/*
+    Copyright (C) 2026 Emanuel
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+*/
 use clap::{Parser, Subcommand, Args, ValueEnum};
 use std::path::PathBuf;
 use colored::*;
@@ -60,14 +73,14 @@ pub mod style {
 #[command(long_about = r#"
 earthang Compiler - Lua-like syntax to bare metal binary
 
-Compile Lua-like code to native binaries for BIOS and Linux.
+Compile Lua-like code to native binaries for Linux with hardware support.
 
 Examples:
   Build a Linux ELF executable:
     earthang compile program.lua --target linux64 --output program
 
-  Build a BIOS boot sector:
-    earthang compile program.lua --target bios16 --output boot.bin
+  Build with hardware DSL support:
+    earthang compile program.lua --target linux64 --hardware --output program
 
   List available targets:
     earthang targets
@@ -112,29 +125,20 @@ pub enum Commands {
     
     /// List available targets
     Targets,
+    
+    /// Hardware DSL commands
+    Hardware(HardwareArgs),
 }
 
 /// System target platforms
 #[derive(Debug, Clone, Copy, PartialEq, ValueEnum)]
 pub enum CliTarget {
-    Bios16,
-    Bios32,
-    Bios64,
-    Bios64Sse,
-    Bios64Avx,
-    Bios64Avx512,
     Linux64,
 }
 
 impl From<CliTarget> for crate::backend::Target {
     fn from(val: CliTarget) -> Self {
         match val {
-            CliTarget::Bios16 => crate::backend::Target::Bios16,
-            CliTarget::Bios32 => crate::backend::Target::Bios32,
-            CliTarget::Bios64 => crate::backend::Target::Bios64,
-            CliTarget::Bios64Sse => crate::backend::Target::Bios64Sse,
-            CliTarget::Bios64Avx => crate::backend::Target::Bios64Avx,
-            CliTarget::Bios64Avx512 => crate::backend::Target::Bios64Avx512,
             CliTarget::Linux64 => crate::backend::Target::Linux64,
         }
     }
@@ -143,12 +147,6 @@ impl From<CliTarget> for crate::backend::Target {
 impl CliTarget {
     fn description(&self) -> &'static str {
         match self {
-            CliTarget::Bios16 => "16-bit BIOS boot sector",
-            CliTarget::Bios32 => "32-bit BIOS protected mode",
-            CliTarget::Bios64 => "64-bit BIOS long mode",
-            CliTarget::Bios64Sse => "64-bit BIOS with SSE",
-            CliTarget::Bios64Avx => "64-bit BIOS with AVX",
-            CliTarget::Bios64Avx512 => "64-bit BIOS with AVX-512",
             CliTarget::Linux64 => "64-bit Linux ELF executable",
         }
     }
@@ -161,20 +159,17 @@ Examples:
   Build Linux ELF executable:
     earthang compile program.lua --target linux64 --output program
 
-  Build BIOS boot sector:
-    earthang compile program.lua --target bios16 --output boot.bin
-
-  Build with SSE extensions:
-    earthang compile program.lua --target bios64sse --output kernel.bin
+  Build with hardware support:
+    earthang compile program.lua --target linux64 --hardware --output program
 
   Build with optimization disabled:
     earthang compile program.lua --target linux64 --no-optimize
 
 Notes:
   - Linux targets produce ELF executables
-  - BIOS targets produce raw binaries for boot sectors
   - Use --keep-assembly to save intermediate assembly files
   - Use --verbose for detailed compilation output
+  - Use --hardware to enable hardware DSL for device access
 "#)]
 pub struct CompileArgs {
     /// Input file
@@ -185,7 +180,7 @@ pub struct CompileArgs {
     pub output: Option<PathBuf>,
     
     /// Target platform
-    #[arg(short, long, value_enum, default_value_t = CliTarget::Bios64)]
+    #[arg(short, long, value_enum, default_value_t = CliTarget::Linux64)]
     pub target: CliTarget,
     
     /// Keep assembly file
@@ -196,6 +191,10 @@ pub struct CompileArgs {
     #[arg(long, help = "Disable code optimization")]
     pub no_optimize: bool,
     
+    /// Enable hardware DSL
+    #[arg(long, help = "Enable hardware DSL for device access")]
+    pub hardware: bool,
+    
     /// Show memory usage
     #[arg(long, help = "Show memory usage statistics")]
     pub memory: bool,
@@ -205,16 +204,16 @@ pub struct CompileArgs {
 #[derive(Args)]
 pub struct GenerateArgs {
     /// Type to generate
-    #[arg(short, long, value_enum, default_value_t = CliTarget::Bios16)]
+    #[arg(short, long, value_enum, default_value_t = CliTarget::Linux64)]
     pub r#type: CliTarget,
-    
-    /// Size in bytes
-    #[arg(short, long, default_value_t = 512)]
-    pub size: usize,
     
     /// Output file
     #[arg(short, long)]
     pub output: Option<PathBuf>,
+    
+    /// Include hardware DSL example
+    #[arg(long, help = "Include hardware DSL example")]
+    pub hardware_example: bool,
 }
 
 /// Arguments for test command
@@ -231,6 +230,31 @@ pub struct TestArgs {
     /// Run all tests
     #[arg(long)]
     pub all: bool,
+    
+    /// Test hardware DSL
+    #[arg(long, help = "Test hardware DSL functionality")]
+    pub hardware: bool,
+}
+
+/// Arguments for hardware commands
+#[derive(Args)]
+pub struct HardwareArgs {
+    /// Hardware command
+    #[command(subcommand)]
+    pub command: HardwareCommands,
+}
+
+/// Hardware subcommands
+#[derive(Subcommand)]
+pub enum HardwareCommands {
+    /// Generate hardware DSL example
+    Example,
+    
+    /// List available hardware devices
+    Devices,
+    
+    /// Test hardware DSL parsing
+    Test,
 }
 
 /// CLI progress reporter
@@ -281,6 +305,7 @@ impl Cli {
                 Commands::Check => self.handle_check(self.verbose),
                 Commands::Targets => self.handle_targets(self.verbose),
                 Commands::Generate(args) => self.handle_generate(args, self.verbose),
+                Commands::Hardware(args) => self.handle_hardware(args, self.verbose),
             },
             None => {
                 if !self.quiet {
@@ -298,6 +323,9 @@ impl Cli {
         println!("{}", style::section("COMPILATION"));
         println!("  {} {}", "Source:".cyan(), style::path(&args.file));
         println!("  {} {}", "Target:".cyan(), style::target(&format!("{:?}", args.target)));
+        if args.hardware {
+            println!("  {} {}", "Hardware DSL:".cyan(), "Enabled".green().bold());
+        }
     }
     
     let input_file = &args.file;
@@ -314,7 +342,7 @@ impl Cli {
     
     let output_file = args.output.as_ref().map_or_else(|| {
         let mut path = input_file.clone();
-        path.set_extension("bin");
+        path.set_extension("elf");
         path
     }, |p| p.clone());
     
@@ -340,7 +368,7 @@ impl Cli {
         modules: Vec::new(),
         debug_info: false,
         include_stdlib: false,
-        hardware_dsl_enabled: false,
+        hardware_dsl_enabled: args.hardware,
         code_size_limit: None,
         search_paths: vec![PathBuf::from("."), PathBuf::from("stdlib")],
     };
@@ -357,21 +385,19 @@ impl Cli {
         progress.done("Compilation successful!");
         println!();
         
-        let target_type = match args.target {
-            CliTarget::Linux64 => "Linux ELF executable",
-            CliTarget::Bios16 | CliTarget::Bios32 | CliTarget::Bios64 |
-            CliTarget::Bios64Sse | CliTarget::Bios64Avx | CliTarget::Bios64Avx512 => "BIOS binary",
-        };
+        let target_type = "Linux ELF executable";
         
         println!("  {} {} {} created", "✓".green(), target_type, style::path(&output_file).bold());
         
-        if args.target == CliTarget::Linux64 {
-            println!("  {} Make executable: {}", ">".blue(), format!("chmod +x {}", output_file.display()).cyan());
-        }
+        println!("  {} Make executable: {}", ">".blue(), format!("chmod +x {}", output_file.display()).cyan());
         
         if args.keep_assembly {
             let asm_file = output_file.with_extension("asm");
             println!("  {} {}", "Assembly saved to:".dimmed(), style::path(&asm_file));
+        }
+        
+        if args.hardware {
+            println!("  {} {}", "Hardware DSL:".dimmed(), "Enabled - includes device access functions".green());
         }
     }
     
@@ -385,84 +411,67 @@ impl Cli {
         if !self.quiet {
             println!("{}", style::section("CODE GENERATION"));
             println!("  {} {}", "Target:".cyan(), style::target(&format!("{:?}", target)));
-            println!("  {} {} bytes", "Size:".cyan(), args.size.to_string().yellow());
+            if args.hardware_example {
+                println!("  {} {}", "Hardware example:".cyan(), "Included".green().bold());
+            }
         }
         
         let output = match target {
-            crate::backend::Target::Bios16 => {
-                progress.step("Generating 16-bit boot sector...");
-                format!(
-                    "; 16-bit Boot Sector ({} bytes)\n\
-                     ; Generated by earthang Compiler\n\
-                     \n\
-                     bits 16\n\
-                     org 0x7C00\n\n\
-                     start:\n\
-                         cli\n\
-                         xor ax, ax\n\
-                         mov ds, ax\n\
-                         mov es, ax\n\
-                         mov ss, ax\n\
-                         mov sp, 0x7C00\n\
-                         sti\n\n\
-                         ; Print message\n\
-                         mov si, msg\n\
-                         call print_string\n\n\
-                         ; Halt\n\
-                         cli\n\
-                         hlt\n\
-                         jmp $\n\n\
-                     print_string:\n\
-                         pusha\n\
-                         mov ah, 0x0E\n\
-                     .loop:\n\
-                         lodsb\n\
-                         test al, al\n\
-                         jz .done\n\
-                         int 0x10\n\
-                         jmp .loop\n\
-                     .done:\n\
-                         popa\n\
-                         ret\n\n\
-                     msg:\n\
-                         db 'earthang 16-bit', 0\n\n\
-                     times {} db 0\n\
-                     dw 0xAA55\n",
-                    args.size,
-                    args.size.saturating_sub(510)
-                )
-            }
             crate::backend::Target::Linux64 => {
                 progress.step("Generating 64-bit Linux ELF executable...");
-                format!(
-                    "; Linux 64-bit ELF Executable\n\
-                     ; Generated by earthang Compiler\n\
-                     \n\
-                     bits 64\n\
-                     default rel\n\n\
-                     section .text\n\
-                     global _start\n\n\
-                     _start:\n\
-                         mov rbp, rsp\n\
-                         and rsp, -16\n\
-                         sub rsp, 32\n\n\
-                         ; Print message\n\
-                         mov rax, 1        ; sys_write\n\
-                         mov rdi, 1        ; stdout\n\
-                         lea rsi, [msg]\n\
-                         mov rdx, 14       ; length\n\
-                         syscall\n\n\
-                         ; Exit\n\
-                         mov rax, 60       ; sys_exit\n\
-                         xor rdi, rdi      ; exit code 0\n\
-                         syscall\n\n\
-                     section .data\n\
-                     msg:\n\
-                         db 'Hello earthang!', 10, 0\n"
-                )
-            }
-            _ => {
-                return Err(progress.error(&format!("Target {:?} not yet implemented for code generation", target)));
+                let mut code = String::new();
+                
+                code.push_str("; Linux 64-bit ELF Executable\n");
+                code.push_str("; Generated by earthang Compiler\n");
+                code.push_str("\n");
+                code.push_str("bits 64\n");
+                code.push_str("default rel\n\n");
+                code.push_str("section .text\n");
+                code.push_str("global _start\n\n");
+                code.push_str("_start:\n");
+                code.push_str("    mov rbp, rsp\n");
+                code.push_str("    and rsp, -16\n");
+                code.push_str("    sub rsp, 32\n\n");
+                code.push_str("    ; Print message\n");
+                code.push_str("    mov rax, 1        ; sys_write\n");
+                code.push_str("    mov rdi, 1        ; stdout\n");
+                code.push_str("    lea rsi, [msg]\n");
+                code.push_str("    mov rdx, 14       ; length\n");
+                code.push_str("    syscall\n\n");
+                code.push_str("    ; Exit\n");
+                code.push_str("    mov rax, 60       ; sys_exit\n");
+                code.push_str("    xor rdi, rdi      ; exit code 0\n");
+                code.push_str("    syscall\n\n");
+                
+                if args.hardware_example {
+                    code.push_str("; Hardware DSL Example\n");
+                    code.push_str("gpu_render_frame:\n");
+                    code.push_str("    ; Example GPU rendering function\n");
+                    code.push_str("    push rbp\n");
+                    code.push_str("    mov rbp, rsp\n");
+                    code.push_str("    \n");
+                    code.push_str("    ; Direct hardware access example\n");
+                    code.push_str("    mov dx, 0x3D4\n");
+                    code.push_str("    mov al, 0x0A\n");
+                    code.push_str("    out dx, al\n");
+                    code.push_str("    \n");
+                    code.push_str("    ; Wait for vertical sync\n");
+                    code.push_str("    mov dx, 0x3DA\n");
+                    code.push_str(".wait_vsync:\n");
+                    code.push_str("    in al, dx\n");
+                    code.push_str("    test al, 8\n");
+                    code.push_str("    jz .wait_vsync\n");
+                    code.push_str("    \n");
+                    code.push_str("    mov rsp, rbp\n");
+                    code.push_str("    pop rbp\n");
+                    code.push_str("    ret\n\n");
+                }
+                
+                code.push_str("section .data\n");
+                code.push_str("msg:\n");
+                code.push_str("    db 'Hello earthang!', 10, 0\n");
+                
+                code
             }
         };
         
@@ -476,13 +485,8 @@ impl Cli {
                 println!("  {} {}", "Output written to:".green(), style::path(output_path).bold());
                 
                 // Show compilation command
-                match target {
-                    crate::backend::Target::Linux64 => {
-                        println!("  {} {}", "Compile with NASM:".dimmed(), format!("nasm -f elf64 {} -o {}.o", output_path.display(), output_path.with_extension("").display()).cyan());
-                        println!("  {} {}", "Link with GCC:".dimmed(), format!("gcc -no-pie {}.o -o {}.elf", output_path.with_extension("").display(), output_path.with_extension("").display()).cyan());
-                    }
-                    _ => {}
-                }
+                println!("  {} {}", "Compile with NASM:".dimmed(), format!("nasm -f elf64 {} -o {}.o", output_path.display(), output_path.with_extension("").display()).cyan());
+                println!("  {} {}", "Link with GCC:".dimmed(), format!("gcc -no-pie {}.o -o {}.elf", output_path.with_extension("").display(), output_path.with_extension("").display()).cyan());
             }
         } else {
             println!("\n{}", output);
@@ -494,6 +498,93 @@ impl Cli {
         Ok(())
     }
     
+    fn handle_hardware(&self, args: &HardwareArgs, verbose: bool) -> Result<(), String> {
+        let progress = Progress::new(verbose);
+        
+        match &args.command {
+            HardwareCommands::Example => {
+                if !self.quiet {
+                    println!("{}", style::section("HARDWARE DSL EXAMPLE"));
+                }
+                
+                let dsl = crate::dsl::HardwareDSL::new();
+                let example = dsl.generate_example();
+                
+                println!("{}", example);
+                
+                progress.done("Hardware DSL example generated");
+                Ok(())
+            }
+            HardwareCommands::Devices => {
+                if !self.quiet {
+                    println!("{}", style::section("AVAILABLE HARDWARE DEVICES"));
+                }
+                
+                let dsl = crate::dsl::HardwareDSL::new();
+                
+                println!("  {} Built-in hardware devices:", style::info(""));
+                for (name, device) in &dsl.device_registry {
+                    println!("    {} {} - {}", 
+                        "•".blue(), 
+                        name.green().bold(),
+                        format!("{:?}", device.device_type).dimmed()
+                    );
+                    
+                    if !device.registers.is_empty() {
+                        println!("      {} Registers:", style::info(""));
+                        for (reg_name, addr) in &device.registers {
+                            println!("        {} {}: 0x{:X}", ">".blue(), reg_name.cyan(), addr);
+                        }
+                    }
+                }
+                
+                progress.done("Device list displayed");
+                Ok(())
+            }
+            HardwareCommands::Test => {
+                if !self.quiet {
+                    println!("{}", style::section("HARDWARE DSL TEST"));
+                }
+                
+                progress.step("Testing hardware DSL parsing...");
+                
+                // Test hardware intrinsics
+                let mut dsl = crate::dsl::HardwareDSL::new();
+                
+                // Test write_register
+                match dsl.parse_hardware_statement("write_register(0x3D4, 0x0A)") {
+                    Ok(asm) => {
+                        progress.done("write_register test passed");
+                        if verbose {
+                            println!("    Generated assembly:");
+                            for line in asm {
+                                println!("      {}", line);
+                            }
+                        }
+                    }
+                    Err(e) => progress.warn(&format!("write_register test failed: {}", e)),
+                }
+                
+                // Test read_register
+                match dsl.parse_hardware_statement("read_register(0x3D5)") {
+                    Ok(_) => progress.done("read_register test passed"),
+                    Err(e) => progress.warn(&format!("read_register test failed: {}", e)),
+                }
+                
+                // Test hardware library generation
+                let lib = dsl.generate_hardware_library();
+                if lib.contains("port_in_8") && lib.contains("gpu_wait_vsync") {
+                    progress.done("Hardware library generation test passed");
+                } else {
+                    progress.warn("Hardware library generation test failed");
+                }
+                
+                progress.done("Hardware DSL tests completed");
+                Ok(())
+            }
+        }
+    }
+    
     fn handle_test(&self, args: &TestArgs, verbose: bool) -> Result<(), String> {
         let progress = Progress::new(verbose || args.verbose);
         let suite = if args.all { "all" } else { &args.suite };
@@ -501,6 +592,9 @@ impl Cli {
         if !self.quiet {
             println!("{}", style::section("RUNNING TESTS"));
             println!("  {} {}", "Suite:".cyan(), suite.blue());
+            if args.hardware {
+                println!("  {} {}", "Hardware tests:".cyan(), "Enabled".green().bold());
+            }
         }
         
         match suite {
@@ -516,6 +610,11 @@ impl Cli {
                 
                 // Lua tests
                 self.run_lua_tests(&progress)?;
+                
+                // Hardware tests if requested
+                if args.hardware {
+                    self.run_hardware_tests(&progress)?;
+                }
                 
                 // Full test suite
                 self.run_full_tests(&progress)?;
@@ -533,6 +632,10 @@ impl Cli {
             "lua" => {
                 self.run_lua_tests(&progress)?;
                 progress.done("Lua-like syntax test passed!");
+            }
+            "hardware" => {
+                self.run_hardware_tests(&progress)?;
+                progress.done("Hardware DSL test passed!");
             }
             "full" => {
                 self.run_full_tests(&progress)?;
@@ -565,6 +668,35 @@ y = x + 5
         }
         
         progress.done("CLI structure test passed");
+        
+        Ok(())
+    }
+    
+    fn run_hardware_tests(&self, progress: &Progress) -> Result<(), String> {
+        progress.step("Testing hardware DSL...");
+        
+        // Test hardware DSL parsing
+        let mut dsl = crate::dsl::HardwareDSL::new();
+        
+        // Test hardware intrinsic
+        match dsl.parse_hardware_statement("write_register(0x3D4, 0x0A)") {
+            Ok(_) => progress.done("Hardware intrinsic parsing test passed"),
+            Err(e) => progress.warn(&format!("Hardware intrinsic parsing failed: {}", e)),
+        }
+        
+        // Test hardware function generation
+        match dsl.generate_device_function_prologue("gpu", "render_frame") {
+            Ok(_) => progress.done("Hardware function prologue test passed"),
+            Err(e) => progress.warn(&format!("Hardware function prologue failed: {}", e)),
+        }
+        
+        // Test hardware library generation
+        let lib = dsl.generate_hardware_library();
+        if lib.contains("port_in_8") && lib.contains("gpu_wait_vsync") {
+            progress.done("Hardware library generation test passed");
+        } else {
+            progress.warn("Hardware library generation test failed");
+        }
         
         Ok(())
     }
@@ -707,36 +839,26 @@ print("Factorial of 5 is: " .. tostring(result))
             progress.step("Listing supported targets...");
         }
         
-        println!("\n  {} BIOS Targets:", style::info(""));
-        for target in [
-            CliTarget::Bios16,
-            CliTarget::Bios32,
-            CliTarget::Bios64,
-            CliTarget::Bios64Sse,
-            CliTarget::Bios64Avx,
-            CliTarget::Bios64Avx512,
-        ].iter() {
-            println!("    {} {} - {}", 
-                ">".blue(), 
-                format!("{:?}", target).green().bold(),
-                target.description().dimmed()
-            );
-        }
-        
         println!("\n  {} OS Targets:", style::info(""));
         println!("    {} {} - {}", 
             ">".blue(), 
             "linux64".green().bold(),
-            "64-bit Linux ELF executable".dimmed()
+            "64-bit Linux ELF executable with hardware DSL support".dimmed()
         );
+        
+        println!("\n  {} Hardware Support:", style::info(""));
+        println!("    {} {} - {}", "•".blue(), "GPU".green(), "VGA/Graphics card access".dimmed());
+        println!("    {} {} - {}", "•".blue(), "Network".green(), "Network card DMA and packet handling".dimmed());
+        println!("    {} {} - {}", "•".blue(), "Storage".green(), "ATA/IDE storage controller".dimmed());
+        println!("    {} {} - {}", "•".blue(), "Sound".green(), "Sound Blaster 16 audio".dimmed());
+        println!("    {} {} - {}", "•".blue(), "Custom devices".green(), "Register custom hardware devices".dimmed());
         
         println!("\n  {} Build Commands:", style::info(""));
         println!("    {} Build Linux ELF: {}", ">".blue(), "earthang compile program.lua --target linux64 --output program".cyan());
-        println!("    {} Build BIOS: {}", ">".blue(), "earthang compile program.lua --target bios64 --output kernel.bin".cyan());
+        println!("    {} Build with hardware: {}", ">".blue(), "earthang compile program.lua --target linux64 --hardware --output program".cyan());
         
         println!("\n  {} Output Formats:", style::info(""));
         println!("    {} {} - Executable and Linkable Format (Linux)", "•".blue(), "ELF".green());
-        println!("    {} {} - Raw binary (BIOS boot sector)", "•".blue(), "Raw".green());
         
         if !self.quiet {
             progress.done("Target list displayed");

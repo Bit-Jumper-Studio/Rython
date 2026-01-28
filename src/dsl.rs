@@ -1,9 +1,23 @@
+/*
+    Copyright (C) 2026 Emanuel
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+*/
 use std::collections::HashMap;
+use std::cell::RefCell;
 
 #[derive(Debug, Clone)]
 pub struct HardwareDSL {
     pub device_registry: HashMap<String, HardwareDevice>,
-    pub assembly_cache: Vec<String>,
+    pub assembly_cache: RefCell<Vec<String>>, // Changed to RefCell
     pub current_device: Option<String>,
 }
 
@@ -48,7 +62,7 @@ impl HardwareDSL {
     pub fn new() -> Self {
         let mut dsl = Self {
             device_registry: HashMap::new(),
-            assembly_cache: Vec::new(),
+            assembly_cache: RefCell::new(Vec::new()), // Initialize as RefCell
             current_device: None,
         };
         
@@ -168,7 +182,7 @@ impl HardwareDSL {
         Ok(asm)
     }
     
-    fn parse_hardware_intrinsic(&mut self, intrinsic: &str) -> Result<Vec<String>, String> {
+    fn parse_hardware_intrinsic(&self, intrinsic: &str) -> Result<Vec<String>, String> {
         // Parse function-like intrinsics
         if let Some((func_name, args)) = intrinsic.split_once('(') {
             let func_name = func_name.trim();
@@ -525,7 +539,6 @@ impl HardwareDSL {
         
         lib.push_str("; ========== HARDWARE DIRECT ACCESS LIBRARY ==========\n\n");
         
-        // Generic hardware functions
         lib.push_str("; Generic port I/O functions\n");
         lib.push_str("port_in_8:\n");
         lib.push_str("    ; Input from 8-bit port\n");
@@ -553,7 +566,6 @@ impl HardwareDSL {
         lib.push_str("    out dx, ax\n");
         lib.push_str("    ret\n\n");
         
-        // DMA functions
         lib.push_str("; DMA transfer functions\n");
         lib.push_str("setup_dma:\n");
         lib.push_str("    ; Setup DMA transfer\n");
@@ -577,7 +589,6 @@ impl HardwareDSL {
         lib.push_str("    sti\n");
         lib.push_str("    ret\n\n");
         
-        // GPU-specific functions
         lib.push_str("; GPU functions\n");
         lib.push_str("gpu_wait_vsync:\n");
         lib.push_str("    ; Wait for vertical retrace\n");
@@ -762,7 +773,6 @@ impl HardwareDevice {
     }
 }
 
-// ========== PARSER EXTENSIONS ==========
 
 // Extend the parser to support hardware DSL syntax
 pub fn parse_hardware_dsl(source: &str) -> Result<Vec<String>, String> {
@@ -802,9 +812,9 @@ pub fn extend_backend_with_hardware(backend_asm: &str, hardware_dsl: &HardwareDS
     final_asm.push_str(&hardware_dsl.generate_hardware_library());
     
     // Add cached assembly
-    if !hardware_dsl.assembly_cache.is_empty() {
+    if !hardware_dsl.assembly_cache.borrow().is_empty() {
         final_asm.push_str("\n\n; ========== HARDWARE FUNCTIONS ==========\n");
-        for asm in &hardware_dsl.assembly_cache {
+        for asm in &*hardware_dsl.assembly_cache.borrow() {
             final_asm.push_str(asm);
             final_asm.push('\n');
         }
@@ -813,14 +823,12 @@ pub fn extend_backend_with_hardware(backend_asm: &str, hardware_dsl: &HardwareDS
     final_asm
 }
 
-// ========== EXAMPLE USAGE ==========
 
 pub fn create_hardware_example() -> String {
     let dsl = HardwareDSL::new();
     dsl.generate_example()
 }
 
-// ========== INTEGRATION WITH EXISTING BACKEND ==========
 
 pub fn integrate_hardware_with_backend(backend: &dyn crate::backend::Backend, dsl: &HardwareDSL) {
     // Hardware DSL integration with backend
@@ -828,7 +836,6 @@ pub fn integrate_hardware_with_backend(backend: &dyn crate::backend::Backend, ds
     println!("Devices registered: {}", dsl.device_registry.len());
 }
 
-// ========== MAIN API ==========
 
 pub fn init_hardware_dsl() -> HardwareDSL {
     HardwareDSL::new()
@@ -842,13 +849,8 @@ pub fn compile_with_hardware(source: &str, target: crate::backend::Target) -> Re
     // Create hardware DSL
     let dsl = HardwareDSL::new();
     
-    // Create appropriate backend
-    let mut backend: Box<dyn crate::backend::Backend> = match target {
-        crate::backend::Target::Bios16 => Box::new(crate::backend::Bios16Backend::new()),
-        crate::backend::Target::Bios32 => Box::new(crate::backend::Bios32Backend::new()),
-        crate::backend::Target::Bios64 => Box::new(crate::backend::Bios64Backend::new()),
-        _ => return Err("Hardware DSL only supports BIOS targets".to_string()),
-    };
+    // Create appropriate backend - only Linux64 is supported
+    let mut backend: Box<dyn crate::backend::Backend> = Box::new(crate::backend::Linux64Backend::new());
     
     // Compile program
     let asm = backend.compile_program(&program)?;
@@ -858,8 +860,6 @@ pub fn compile_with_hardware(source: &str, target: crate::backend::Target) -> Re
     
     Ok(final_asm)
 }
-
-// ========== TEST FUNCTIONS ==========
 
 #[cfg(test)]
 mod tests {

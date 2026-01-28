@@ -1,6 +1,18 @@
-// dont mind the warnings, im too lazy to remove them, its working, dont mess with something thats already working
+/*
+    Copyright (C) 2026 Emanuel
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+*/
 use crate::parser::{Program, Statement, Expr, Op, CompareOp};
-use crate::dsl::{HardwareDSL};
+use crate::dsl::{HardwareDSL, DeviceType};
 use std::collections::HashMap;
 use std::cell::RefCell;
 use std::any::Any;
@@ -8,12 +20,6 @@ use std::any::Any;
 // Target platforms
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Target {
-    Bios16,
-    Bios32,
-    Bios64,
-    Bios64Sse,
-    Bios64Avx,
-    Bios64Avx512,
     Linux64,
 }
 
@@ -21,8 +27,6 @@ pub enum Target {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Capability {
     // Architecture
-    RealMode16,
-    ProtectedMode32,
     LongMode64,
     
     // Extensions
@@ -41,9 +45,6 @@ pub enum Capability {
     Graphics,
     
     // Environment
-    BIOS,
-    _UEFI,
-    PureMetal,
     Linux,
     
     // Constraints
@@ -312,42 +313,24 @@ impl BasicAssemblyEmitter {
 
 impl AssemblyEmitter for BasicAssemblyEmitter {
     fn emit_call(&mut self, func: &str, args: &[String]) -> String {
-        match self.target {
-            Target::Linux64 => {
-                let mut asm = String::new();
-                for (i, arg) in args.iter().enumerate() {
-                    match i {
-                        0 => asm.push_str(&format!("    mov rdi, {}\n", arg)),
-                        1 => asm.push_str(&format!("    mov rsi, {}\n", arg)),
-                        2 => asm.push_str(&format!("    mov rdx, {}\n", arg)),
-                        3 => asm.push_str(&format!("    mov rcx, {}\n", arg)),
-                        4 => asm.push_str(&format!("    mov r8, {}\n", arg)),
-                        5 => asm.push_str(&format!("    mov r9, {}\n", arg)),
-                        _ => asm.push_str(&format!("    push {}\n", arg)),
-                    }
-                }
-                if args.len() > 6 {
-                    asm.push_str(&format!("    ; {} stack args passed\n", args.len() - 6));
-                }
-                asm.push_str(&format!("    call {}\n", func));
-                asm
+        // Since we only have Linux64 target, remove the match
+        let mut asm = String::new();
+        for (i, arg) in args.iter().enumerate() {
+            match i {
+                0 => asm.push_str(&format!("    mov rdi, {}\n", arg)),
+                1 => asm.push_str(&format!("    mov rsi, {}\n", arg)),
+                2 => asm.push_str(&format!("    mov rdx, {}\n", arg)),
+                3 => asm.push_str(&format!("    mov rcx, {}\n", arg)),
+                4 => asm.push_str(&format!("    mov r8, {}\n", arg)),
+                5 => asm.push_str(&format!("    mov r9, {}\n", arg)),
+                _ => asm.push_str(&format!("    push {}\n", arg)),
             }
-            Target::Bios64 => {
-                let mut asm = String::new();
-                for (i, arg) in args.iter().enumerate() {
-                    match i {
-                        0 => asm.push_str(&format!("    mov rax, {}\n", arg)),
-                        1 => asm.push_str(&format!("    mov rbx, {}\n", arg)),
-                        2 => asm.push_str(&format!("    mov rcx, {}\n", arg)),
-                        3 => asm.push_str(&format!("    mov rdx, {}\n", arg)),
-                        _ => asm.push_str(&format!("    ; arg{}: {}\n", i, arg)),
-                    }
-                }
-                asm.push_str(&format!("    call {}\n", func));
-                asm
-            }
-            _ => format!("    ; call {} - target not implemented\n", func),
         }
+        if args.len() > 6 {
+            asm.push_str(&format!("    ; {} stack args passed\n", args.len() - 6));
+        }
+        asm.push_str(&format!("    call {}\n", func));
+        asm
     }
     
     fn emit_reg_move(&mut self, src: &str, dst: &str) -> String {
@@ -489,2065 +472,10 @@ impl BackendRegistry {
     pub fn default_registry() -> Self {
         let mut registry = Self::new();
         
-        registry.register(Box::new(Bios16Backend::new()));
-        registry.register(Box::new(Bios32Backend::new()));
-        registry.register(Box::new(Bios64Backend::new()));
-        registry.register(Box::new(Bios64Backend::new().with_sse()));
-        registry.register(Box::new(Bios64Backend::new().with_avx()));
-        registry.register(Box::new(Bios64Backend::new().with_avx512()));
+        // Only register Linux64 backend
         registry.register(Box::new(Linux64Backend::new()));
         
         registry
-    }
-}
-
-pub struct Bios16Backend {
-    string_literals: HashMap<String, String>,
-}
-
-impl Bios16Backend {
-    pub fn new() -> Self {
-        Self {
-            string_literals: HashMap::new(),
-        }
-    }
-    
-    fn generate_string_data(&self) -> String {
-        let mut data = String::new();
-        for (content, label) in &self.string_literals {
-            data.push_str(&format!("{}:\n", label));
-            data.push_str(&format!("    db '{}', 0\n", content.replace("'", "''")));
-        }
-        data
-    }
-}
-
-impl Backend for Bios16Backend {
-    fn name(&self) -> &str {
-        "bios16"
-    }
-    
-    fn generate_header(&self) -> String {
-        String::from("; BIOS 16-bit Backend\n    org 0x7C00\n    bits 16\n\n")
-    }
-    
-    fn format(&self) -> &'static str {
-        "bin"
-    }
-    
-    fn supported_capabilities(&self) -> Vec<Capability> {
-        vec![
-            Capability::BIOS,
-            Capability::RealMode16,
-            Capability::PureMetal,
-            Capability::NoHeap,
-            Capability::NoFilesystem,
-        ]
-    }
-    
-    fn compile_program(&mut self, program: &Program) -> Result<String, String> {
-        let mut asm = String::new();
-        
-        asm.push_str("; Earthang BIOS 16-bit Backend\n");
-        asm.push_str("; Generated from Earthang AST\n\n");
-        asm.push_str("    org 0x7C00\n");
-        asm.push_str("    bits 16\n\n");
-        
-        asm.push_str("start:\n");
-        asm.push_str("    cli\n");
-        asm.push_str("    xor ax, ax\n");
-        asm.push_str("    mov ds, ax\n");
-        asm.push_str("    mov es, ax\n");
-        asm.push_str("    mov ss, ax\n");
-        asm.push_str("    mov sp, 0x7C00\n");
-        asm.push_str("    sti\n");
-        asm.push_str("    cld\n\n");
-        
-        asm.push_str("    mov ax, 0x0003\n");
-        asm.push_str("    int 0x10\n\n");
-        
-        for stmt in &program.body {
-            match stmt {
-                Statement::VarDecl { name, value, type_hint: _, span: _ } => {
-                    asm.push_str(&format!("; Variable: {}\n", name));
-                    asm.push_str(&self.compile_expression(value)?);
-                }
-                Statement::Expr(expr) => {
-                    asm.push_str("; Expression\n");
-                    asm.push_str(&self.compile_expression(expr)?);
-                }
-                _ => {
-                    asm.push_str("; [Statement]\n");
-                }
-            }
-        }
-        
-        asm.push_str("\n    cli\n");
-        asm.push_str("    hlt\n");
-        asm.push_str("    jmp $\n\n");
-        
-        asm.push_str("print_string:\n");
-        asm.push_str("    pusha\n");
-        asm.push_str(".loop:\n");
-        asm.push_str("    lodsb\n");
-        asm.push_str("    test al, al\n");
-        asm.push_str("    jz .done\n");
-        asm.push_str("    int 0x10\n");
-        asm.push_str("    jmp .loop\n");
-        asm.push_str(".done:\n");
-        asm.push_str("    popa\n");
-        asm.push_str("    ret\n\n");
-        
-        asm.push_str("print_decimal:\n");
-        asm.push_str("    pusha\n");
-        asm.push_str("    mov cx, 0\n");
-        asm.push_str("    mov bx, 10\n");
-        asm.push_str(".div_loop:\n");
-        asm.push_str("    xor dx, dx\n");
-        asm.push_str("    div bx\n");
-        asm.push_str("    push dx\n");
-        asm.push_str("    inc cx\n");
-        asm.push_str("    test ax, ax\n");
-        asm.push_str("    jnz .div_loop\n");
-        asm.push_str(".print_loop:\n");
-        asm.push_str("    pop ax\n");
-        asm.push_str("    add al, '0'\n");
-        asm.push_str("    mov ah, 0x0E\n");
-        asm.push_str("    int 0x10\n");
-        asm.push_str("    loop .print_loop\n");
-        asm.push_str("    popa\n");
-        asm.push_str("    ret\n\n");
-        
-        asm.push_str("; String literals\n");
-        asm.push_str(&self.generate_string_data());
-        
-        asm.push_str("\n    times 510-($-$$) db 0\n");
-        asm.push_str("    dw 0xAA55\n");
-        
-        Ok(asm)
-    }
-    
-    fn function_prologue(&self, func: &BackendFunction) -> String {
-        format!("{}:\n    push bp\n    mov bp, sp\n", func.name)
-    }
-    
-    fn function_epilogue(&self, _func: &BackendFunction) -> String {
-        "    mov sp, bp\n    pop bp\n    ret\n".to_string()
-    }
-    
-    fn compile_expression(&mut self, expr: &Expr) -> Result<String, String> {
-        match expr {
-            Expr::Number(n, _) => Ok(format!("    ; Number: {}\n    mov ax, {}\n    call print_decimal\n", n, n)),
-            Expr::String(s, _) => Ok(format!("    ; String: '{}'\n    mov si, str_const\n    call print_string\n", s)),
-            Expr::Call { func, args, kwargs: _, span: _ } => {
-                if func == "print" {
-                    let mut code = String::new();
-                    for arg in args {
-                        let arg_code = self.compile_expression(arg)?;
-                        code.push_str(&arg_code);
-                    }
-                    Ok(code)
-                } else {
-                    Ok(format!("    call {}\n", func))
-                }
-            }
-            _ => Ok("    ; [Expression]\n".to_string()),
-        }
-    }
-    
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-}
-
-pub struct Bios32Backend {
-    string_literals: HashMap<String, String>,
-}
-
-impl Bios32Backend {
-    pub fn new() -> Self {
-        Self {
-            string_literals: HashMap::new(),
-        }
-    }
-    
-    fn generate_string_data(&self) -> String {
-        let mut data = String::new();
-        for (content, label) in &self.string_literals {
-            data.push_str(&format!("{}:\n", label));
-            data.push_str(&format!("    db '{}', 0\n", content.replace("'", "''")));
-        }
-        data
-    }
-}
-
-impl Backend for Bios32Backend {
-    fn name(&self) -> &str {
-        "bios32"
-    }
-    
-    fn generate_header(&self) -> String {
-        String::from("; BIOS 32-bit Backend\n    org 0x7C00\n    bits 16\n\n")
-    }
-    
-    fn format(&self) -> &'static str {
-        "bin"
-    }
-    
-    fn supported_capabilities(&self) -> Vec<Capability> {
-        vec![
-            Capability::BIOS,
-            Capability::ProtectedMode32,
-            Capability::PureMetal,
-            Capability::Paging,
-        ]
-    }
-    
-    fn compile_program(&mut self, program: &Program) -> Result<String, String> {
-        let mut asm = String::new();
-        
-        asm.push_str("; Earthang BIOS 32-bit Backend\n");
-        asm.push_str("; Generated from Earthang AST\n\n");
-        asm.push_str("    org 0x7C00\n");
-        asm.push_str("    bits 16\n\n");
-        
-        asm.push_str("start:\n");
-        asm.push_str("    cli\n");
-        asm.push_str("    xor ax, ax\n");
-        asm.push_str("    mov ds, ax\n");
-        asm.push_str("    mov es, ax\n");
-        asm.push_str("    mov ss, ax\n");
-        asm.push_str("    mov sp, 0x7C00\n");
-        asm.push_str("    sti\n");
-        asm.push_str("    cld\n\n");
-        
-        asm.push_str("    mov ax, 0x0003\n");
-        asm.push_str("    int 0x10\n\n");
-        
-        asm.push_str("    in al, 0x92\n");
-        asm.push_str("    or al, 2\n");
-        asm.push_str("    out 0x92, al\n\n");
-        
-        asm.push_str("    lgdt [gdt32_desc]\n\n");
-        
-        asm.push_str("    mov eax, cr0\n");
-        asm.push_str("    or eax, 1\n");
-        asm.push_str("    mov cr0, eax\n\n");
-        
-        asm.push_str("    jmp 0x08:protected_mode\n\n");
-        
-        asm.push_str("    bits 32\n");
-        asm.push_str("protected_mode:\n");
-        asm.push_str("    mov ax, 0x10\n");
-        asm.push_str("    mov ds, ax\n");
-        asm.push_str("    mov es, ax\n");
-        asm.push_str("    mov fs, ax\n");
-        asm.push_str("    mov gs, ax\n");
-        asm.push_str("    mov ss, ax\n");
-        asm.push_str("    mov esp, 0x7C00\n\n");
-        
-        for stmt in &program.body {
-            match stmt {
-                Statement::VarDecl { name, value, type_hint: _, span: _ } => {
-                    asm.push_str(&format!("; Variable: {}\n", name));
-                    asm.push_str(&self.compile_expression(value)?);
-                }
-                Statement::Expr(expr) => {
-                    asm.push_str("; Expression\n");
-                    asm.push_str(&self.compile_expression(expr)?);
-                }
-                _ => {
-                    asm.push_str("; [Statement]\n");
-                }
-            }
-        }
-        
-        asm.push_str("\n    cli\n");
-        asm.push_str("    hlt\n");
-        asm.push_str("    jmp $\n\n");
-        
-        asm.push_str("print_string_32:\n");
-        asm.push_str("    pusha\n");
-        asm.push_str(".loop:\n");
-        asm.push_str("    lodsb\n");
-        asm.push_str("    test al, al\n");
-        asm.push_str("    jz .done\n");
-        asm.push_str("    mov [edi], al\n");
-        asm.push_str("    inc edi\n");
-        asm.push_str("    mov byte [edi], 0x0F\n");
-        asm.push_str("    inc edi\n");
-        asm.push_str("    jmp .loop\n");
-        asm.push_str(".done:\n");
-        asm.push_str("    popa\n");
-        asm.push_str("    ret\n\n");
-        
-        asm.push_str("print_decimal_32:\n");
-        asm.push_str("    pusha\n");
-        asm.push_str("    mov ecx, 0\n");
-        asm.push_str("    mov ebx, 10\n");
-        asm.push_str("    mov edi, 0xB8000 + 160\n");
-        asm.push_str(".div_loop:\n");
-        asm.push_str("    xor edx, edx\n");
-        asm.push_str("    div ebx\n");
-        asm.push_str("    push dx\n");
-        asm.push_str("    inc ecx\n");
-        asm.push_str("    test eax, eax\n");
-        asm.push_str("    jnz .div_loop\n");
-        asm.push_str(".print_loop:\n");
-        asm.push_str("    pop ax\n");
-        asm.push_str("    add al, '0'\n");
-        asm.push_str("    mov [edi], al\n");
-        asm.push_str("    inc edi\n");
-        asm.push_str("    mov byte [edi], 0x0F\n");
-        asm.push_str("    inc edi\n");
-        asm.push_str("    loop .print_loop\n");
-        asm.push_str("    popa\n");
-        asm.push_str("    ret\n\n");
-        
-        asm.push_str("; String literals\n");
-        asm.push_str(&self.generate_string_data());
-        
-        asm.push_str("gdt32:\n");
-        asm.push_str("    dq 0x0000000000000000\n");
-        asm.push_str("    dq 0x00CF9A000000FFFF\n");
-        asm.push_str("    dq 0x00CF92000000FFFF\n");
-        asm.push_str("gdt32_end:\n\n");
-        
-        asm.push_str("gdt32_desc:\n");
-        asm.push_str("    dw gdt32_end - gdt32 - 1\n");
-        asm.push_str("    dd gdt32\n\n");
-        
-        asm.push_str("    times 510-($-$$) db 0\n");
-        asm.push_str("    dw 0xAA55\n");
-        
-        Ok(asm)
-    }
-    
-    fn function_prologue(&self, func: &BackendFunction) -> String {
-        format!("{}:\n    push ebp\n    mov ebp, esp\n", func.name)
-    }
-    
-    fn function_epilogue(&self, _func: &BackendFunction) -> String {
-        "    mov esp, ebp\n    pop ebp\n    ret\n".to_string()
-    }
-    
-    fn compile_expression(&mut self, expr: &Expr) -> Result<String, String> {
-        match expr {
-            Expr::Number(n, _) => Ok(format!("    mov eax, {}\n    call print_decimal_32\n", n)),
-            Expr::String(s, _) => {
-                let label = format!("str_{}", s.hash_code());
-                Ok(format!("    ; String: '{}'\n    mov esi, {}\n    mov edi, 0xB8000\n    call print_string_32\n", s, label))
-            }
-            Expr::Call { func, args, kwargs: _, span: _ } => {
-                if func == "print" {
-                    let mut code = String::new();
-                    for arg in args {
-                        code.push_str(&self.compile_expression(arg)?);
-                    }
-                    Ok(code)
-                } else {
-                    Ok(format!("    call {}\n", func))
-                }
-            }
-            _ => Ok("    ; [Expression]\n".to_string()),
-        }
-    }
-    
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-}
-
-pub struct Bios64Backend {
-    use_sse: bool,
-    use_avx: bool,
-    use_avx512: bool,
-    code_size_limit: usize,
-    hardware_dsl: HardwareDSL,
-    label_counter: RefCell<u32>,
-    memory_manager: std::rc::Rc<std::cell::RefCell<BareMetalMemoryManager>>,
-    current_function: RefCell<Option<String>>,
-    current_stack_depth: RefCell<i32>,
-    loop_stack: RefCell<Vec<(String, String)>>,
-}
-
-impl Bios64Backend {
-    pub fn new() -> Self {
-        Self {
-            use_sse: false,
-            use_avx: false,
-            use_avx512: false,
-            code_size_limit: 4096,
-            hardware_dsl: HardwareDSL::new(),
-            label_counter: RefCell::new(0),
-            memory_manager: std::rc::Rc::new(std::cell::RefCell::new(BareMetalMemoryManager::new())),
-            current_function: RefCell::new(None),
-            current_stack_depth: RefCell::new(0),
-            loop_stack: RefCell::new(Vec::new()),
-        }
-    }
-    
-    
-    pub fn with_sse(mut self) -> Self {
-        self.use_sse = true;
-        self
-    }
-    
-    pub fn with_avx(mut self) -> Self {
-        self.use_avx = true;
-        self
-    }
-    
-    pub fn with_avx512(mut self) -> Self {
-        self.use_avx512 = true;
-        self
-    }
-    
-    fn get_next_label_id(&self) -> u32 {
-        let mut counter = self.label_counter.borrow_mut();
-        let id = *counter;
-        *counter += 1;
-        id
-    }
-    
-    fn allocate_global_variable(&self, name: &str, size: usize, type_: &str, 
-                               value: Option<String>) -> Result<u64, String> {
-        let mut mm = self.memory_manager.borrow_mut();
-        
-        let align = match type_ {
-            "int" | "float" => 8,
-            "double" => 8,
-            "string" => 1,
-            "array" => 16,
-            _ => 8,
-        };
-        
-        let address = mm.allocate_data(size, align)?;
-        mm.register_symbol(name.to_string(), address, size, type_, value);
-        
-        Ok(address)
-    }
-    
-    fn store_string_literal(&self, content: &str) -> String {
-        let mut mm = self.memory_manager.borrow_mut();
-        
-        if let Some((_addr, label)) = mm.string_literals.get(content) {
-            return label.clone();
-        }
-        
-        let size = content.len() + 1;
-        let address = mm.allocate_data(size, 1).unwrap();
-        let label = format!("str_{:x}", address);
-        
-        mm.string_literals.insert(content.to_string(), (address, label.clone()));
-        label
-    }
-    
-    fn get_variable_address(&self, name: &str) -> Result<String, String> {
-        let mm = self.memory_manager.borrow();
-        
-        if let Some(symbol) = mm.get_symbol(name) {
-            Ok(symbol.name.clone())
-        } else {
-            Err(format!("Undefined variable: {}", name))
-        }
-    }
-    
-    fn get_string_address(&self, content: &str) -> Option<String> {
-        let mm = self.memory_manager.borrow();
-        mm.string_literals.get(content).map(|(_address, label)| label.clone())
-    }
-    
-    fn collect_string_literals(&mut self, program: &Program) {
-        for stmt in &program.body {
-            self.collect_strings_from_stmt(stmt);
-        }
-    }
-    
-    fn collect_strings_from_stmt(&mut self, stmt: &Statement) {
-        match stmt {
-            Statement::Expr(expr) => self.collect_strings_from_expr(expr),
-            Statement::VarDecl { value, .. } => self.collect_strings_from_expr(value),
-            Statement::Assign { value, .. } => self.collect_strings_from_expr(value),
-            Statement::If { condition, then_block, elif_blocks, else_block, .. } => {
-                self.collect_strings_from_expr(condition);
-                for stmt in then_block {
-                    self.collect_strings_from_stmt(stmt);
-                }
-                for (cond, block) in elif_blocks {
-                    self.collect_strings_from_expr(cond);
-                    for stmt in block {
-                        self.collect_strings_from_stmt(stmt);
-                    }
-                }
-                if let Some(else_block) = else_block {
-                    for stmt in else_block {
-                        self.collect_strings_from_stmt(stmt);
-                    }
-                }
-            }
-            Statement::While { condition, body, .. } => {
-                self.collect_strings_from_expr(condition);
-                for stmt in body {
-                    self.collect_strings_from_stmt(stmt);
-                }
-            }
-            Statement::FunctionDef { body, .. } => {
-                for stmt in body {
-                    self.collect_strings_from_stmt(stmt);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn collect_strings_from_expr(&mut self, expr: &Expr) {
-        match expr {
-            Expr::String(s, _) => {
-                self.store_string_literal(s);
-            }
-            Expr::Call { args, .. } => {
-                for arg in args {
-                    self.collect_strings_from_expr(arg);
-                }
-            }
-            Expr::BinOp { left, right, .. } => {
-                self.collect_strings_from_expr(left);
-                self.collect_strings_from_expr(right);
-            }
-            Expr::Compare { left, comparators, .. } => {
-                self.collect_strings_from_expr(left);
-                for comp in comparators {
-                    self.collect_strings_from_expr(comp);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn generate_data_section(&self) -> String {
-    let mm = self.memory_manager.borrow();
-    let mut data = String::new();
-    
-    data.push_str("\n; ========== DATA SECTION ==========\n");
-    data.push_str("section .data\n");
-    data.push_str("    align 16\n\n");
-    
-    // Only include initialized symbols in .data
-    for (name, symbol) in &mm.symbol_table {
-        if symbol.is_initialized {
-            data.push_str(&format!("; Global variable: {} ({})\n", name, symbol.type_));
-            data.push_str(&format!("global {}\n", name));
-            data.push_str(&format!("{}:\n", name));
-            
-            if let Some(value) = &symbol.value {
-                match symbol.type_.as_str() {
-                    "int" => {
-                        if let Ok(num) = value.parse::<i64>() {
-                            data.push_str(&format!("    dq {}\n", num));
-                        } else {
-                            data.push_str("    dq 0\n");
-                        }
-                    }
-                    "string" => {
-                        // For strings, store the pointer to the string literal
-                        data.push_str(&format!("    dq {}\n", value));
-                    }
-                    _ => {
-                        data.push_str(&format!("    times {} db 0\n", symbol.size));
-                    }
-                }
-            } else {
-                data.push_str(&format!("    times {} db 0\n", symbol.size));
-            }
-            data.push_str("\n");
-        }
-    }
-    
-    if !mm.string_literals.is_empty() {
-        data.push_str("; String literals\n");
-        for (content, (_address, label)) in &mm.string_literals {
-            data.push_str(&format!("{}:\n", label));
-            data.push_str(&format!("    db '{}', 0\n", content.replace("'", "''")));
-            data.push_str("\n");
-        }
-    }
-    
-    data
-}
-
-fn generate_bss_section(&self) -> String {
-    let mm = self.memory_manager.borrow();
-    let mut bss = String::new();
-    
-    let uninitialized: Vec<&Symbol> = mm.symbol_table.values()
-        .filter(|s| !s.is_initialized)
-        .collect();
-    
-    if !uninitialized.is_empty() {
-        bss.push_str("\n; ========== BSS SECTION ==========\n");
-        bss.push_str("section .bss\n");
-        bss.push_str("    align 16\n\n");
-        
-        for symbol in uninitialized {
-            bss.push_str(&format!("; Uninitialized variable: {} ({})\n", symbol.name, symbol.type_));
-            bss.push_str(&format!("global {}\n", symbol.name));
-            bss.push_str(&format!("{}: resb {}\n", symbol.name, symbol.size));
-            bss.push_str("\n");
-        }
-    }
-    
-    bss
-}
-
-fn generate_utility_functions(&self) -> String {
-    let mut utils = String::new();
-    
-    utils.push_str("; ========== UTILITY FUNCTIONS ==========\n\n");
-    
-    // Add cursor position variable in BSS section
-    utils.push_str("; Cursor position (offset from 0xB8000)\n");
-    utils.push_str("cursor_pos:\n");
-    utils.push_str("    dq 0\n\n");
-    
-    // Initialize cursor at the beginning
-    utils.push_str("; Initialize cursor position\n");
-    utils.push_str("init_cursor:\n");
-    utils.push_str("    xor rax, rax\n");
-    utils.push_str("    mov [cursor_pos], rax\n");
-    utils.push_str("    ret\n\n");
-    
-    // 64-bit print function for VGA text buffer with cursor tracking
-    utils.push_str("; 64-bit print null-terminated string\n");
-    utils.push_str("; Input: RSI = string address\n");
-    utils.push_str("print_string_64:\n");
-    utils.push_str("    push rax\n");
-    utils.push_str("    push rdi\n");
-    utils.push_str("    push rsi\n");
-    utils.push_str("    \n");
-    utils.push_str("    ; Calculate destination address: 0xB8000 + cursor_pos\n");
-    utils.push_str("    mov rdi, 0xB8000\n");
-    utils.push_str("    add rdi, [cursor_pos]\n");
-    utils.push_str("    \n");
-    utils.push_str(".print_loop:\n");
-    utils.push_str("    mov al, [rsi]\n");
-    utils.push_str("    test al, al\n");
-    utils.push_str("    jz .print_done\n");
-    utils.push_str("    \n");
-    utils.push_str("    ; Handle newline character\n");
-    utils.push_str("    cmp al, 10\n");
-    utils.push_str("    je .handle_newline\n");
-    utils.push_str("    cmp al, 13\n");
-    utils.push_str("    je .handle_newline\n");
-    utils.push_str("    \n");
-    utils.push_str("    ; Normal character\n");
-    utils.push_str("    mov [rdi], al\n");
-    utils.push_str("    inc rdi\n");
-    utils.push_str("    mov byte [rdi], 0x0F  ; White on black\n");
-    utils.push_str("    inc rdi\n");
-    utils.push_str("    inc rsi\n");
-    utils.push_str("    jmp .print_loop\n");
-    utils.push_str("    \n");
-    utils.push_str(".handle_newline:\n");
-    utils.push_str("    inc rsi\n");
-    utils.push_str("    ; Move to next line: cursor_pos = ((cursor_pos + 160) / 160) * 160\n");
-    utils.push_str("    mov rax, [cursor_pos]\n");
-    utils.push_str("    add rax, 160\n");
-    utils.push_str("    xor rdx, rdx\n");
-    utils.push_str("    mov rbx, 160\n");
-    utils.push_str("    div rbx\n");
-    utils.push_str("    mul rbx\n");
-    utils.push_str("    mov [cursor_pos], rax\n");
-    utils.push_str("    mov rdi, 0xB8000\n");
-    utils.push_str("    add rdi, rax\n");
-    utils.push_str("    jmp .print_loop\n");
-    utils.push_str("    \n");
-    utils.push_str(".print_done:\n");
-    utils.push_str("    ; Update cursor position\n");
-    utils.push_str("    sub rdi, 0xB8000\n");
-    utils.push_str("    mov [cursor_pos], rdi\n");
-    utils.push_str("    \n");
-    utils.push_str("    pop rsi\n");
-    utils.push_str("    pop rdi\n");
-    utils.push_str("    pop rax\n");
-    utils.push_str("    ret\n\n");
-    
-    // Newline function
-    utils.push_str("; Print newline\n");
-    utils.push_str("print_newline_64:\n");
-    utils.push_str("    push rax\n");
-    utils.push_str("    push rdx\n");
-    utils.push_str("    push rbx\n");
-    utils.push_str("    \n");
-    utils.push_str("    ; Move to next line: cursor_pos = ((cursor_pos + 160) / 160) * 160\n");
-    utils.push_str("    mov rax, [cursor_pos]\n");
-    utils.push_str("    add rax, 160\n");
-    utils.push_str("    xor rdx, rdx\n");
-    utils.push_str("    mov rbx, 160\n");
-    utils.push_str("    div rbx\n");
-    utils.push_str("    mul rbx\n");
-    utils.push_str("    mov [cursor_pos], rax\n");
-    utils.push_str("    \n");
-    utils.push_str("    pop rbx\n");
-    utils.push_str("    pop rdx\n");
-    utils.push_str("    pop rax\n");
-    utils.push_str("    ret\n\n");
-    
-    // Clear screen function
-    utils.push_str("; Clear screen\n");
-    utils.push_str("clear_screen_64:\n");
-    utils.push_str("    push rax\n");
-    utils.push_str("    push rcx\n");
-    utils.push_str("    push rdi\n");
-    utils.push_str("    \n");
-    utils.push_str("    mov rdi, 0xB8000\n");
-    utils.push_str("    mov rax, 0x0720072007200720  ; Space with attribute\n");
-    utils.push_str("    mov rcx, 1000  ; 80x25 = 2000 characters, 1000 qwords\n");
-    utils.push_str("    rep stosq\n");
-    utils.push_str("    \n");
-    utils.push_str("    ; Reset cursor\n");
-    utils.push_str("    xor rax, rax\n");
-    utils.push_str("    mov [cursor_pos], rax\n");
-    utils.push_str("    \n");
-    utils.push_str("    pop rdi\n");
-    utils.push_str("    pop rcx\n");
-    utils.push_str("    pop rax\n");
-    utils.push_str("    ret\n\n");
-    
-    utils.push_str("; Print decimal number\n");
-    utils.push_str("; Input: RAX = number to print\n");
-    utils.push_str("print_decimal_64:\n");
-    utils.push_str("    push rbx\n");
-    utils.push_str("    push rcx\n");
-    utils.push_str("    push rdx\n");
-    utils.push_str("    push rdi\n");
-    utils.push_str("    push rsi\n");
-    utils.push_str("    \n");
-    utils.push_str("    ; Save the number\n");
-    utils.push_str("    mov rbx, rax\n");
-    utils.push_str("    \n");
-    utils.push_str("    ; Get cursor position\n");
-    utils.push_str("    mov rdi, 0xB8000\n");
-    utils.push_str("    add rdi, [cursor_pos]\n");
-    utils.push_str("    \n");
-    utils.push_str("    ; Handle zero\n");
-    utils.push_str("    test rbx, rbx\n");
-    utils.push_str("    jnz .not_zero\n");
-    utils.push_str("    mov byte [rdi], '0'\n");
-    utils.push_str("    inc rdi\n");
-    utils.push_str("    mov byte [rdi], 0x0F\n");
-    utils.push_str("    inc rdi\n");
-    utils.push_str("    jmp .update_cursor\n");
-    utils.push_str("    \n");
-    utils.push_str(".not_zero:\n");
-    utils.push_str("    ; Handle negative numbers\n");
-    utils.push_str("    mov rsi, 0  ; Sign flag (0=positive, 1=negative)\n");
-    utils.push_str("    test rbx, rbx\n");
-    utils.push_str("    jns .positive\n");
-    utils.push_str("    neg rbx\n");
-    utils.push_str("    mov rsi, 1\n");
-    utils.push_str("    \n");
-    utils.push_str(".positive:\n");
-    utils.push_str("    ; Convert to string in reverse\n");
-    utils.push_str("    mov rcx, 0\n");
-    utils.push_str("    mov rax, rbx\n");
-    utils.push_str("    mov rdx, 0\n");
-    utils.push_str("    mov rbx, 10\n");
-    utils.push_str("    \n");
-    utils.push_str(".convert_loop:\n");
-    utils.push_str("    xor rdx, rdx\n");
-    utils.push_str("    div rbx\n");
-    utils.push_str("    add dl, '0'\n");
-    utils.push_str("    push rdx\n");
-    utils.push_str("    inc rcx\n");
-    utils.push_str("    test rax, rax\n");
-    utils.push_str("    jnz .convert_loop\n");
-    utils.push_str("    \n");
-    utils.push_str("    ; Print minus sign if negative\n");
-    utils.push_str("    test rsi, rsi\n");
-    utils.push_str("    jz .print_digits\n");
-    utils.push_str("    mov byte [rdi], '-'\n");
-    utils.push_str("    inc rdi\n");
-    utils.push_str("    mov byte [rdi], 0x0F\n");
-    utils.push_str("    inc rdi\n");
-    utils.push_str("    \n");
-    utils.push_str(".print_digits:\n");
-    utils.push_str("    ; Pop and print digits\n");
-    utils.push_str(".pop_loop:\n");
-    utils.push_str("    pop rax\n");
-    utils.push_str("    mov [rdi], al\n");
-    utils.push_str("    inc rdi\n");
-    utils.push_str("    mov byte [rdi], 0x0F\n");
-    utils.push_str("    inc rdi\n");
-    utils.push_str("    loop .pop_loop\n");
-    utils.push_str("    \n");
-    utils.push_str(".update_cursor:\n");
-    utils.push_str("    ; Update cursor position\n");
-    utils.push_str("    sub rdi, 0xB8000\n");
-    utils.push_str("    mov [cursor_pos], rdi\n");
-    utils.push_str("    \n");
-    utils.push_str("    pop rsi\n");
-    utils.push_str("    pop rdi\n");
-    utils.push_str("    pop rdx\n");
-    utils.push_str("    pop rcx\n");
-    utils.push_str("    pop rbx\n");
-    utils.push_str("    ret\n");
-    
-    utils
-}
-    
-    fn compile_expression_impl(&mut self, expr: &Expr, func_ctx: &mut Option<&mut FunctionContext>) -> Result<String, String> {
-    let mut code = String::new();
-    
-    match expr {
-        Expr::Number(n, _) => {
-            code.push_str(&format!("    ; Number: {}\n", n));
-            code.push_str(&format!("    mov rax, {}\n", n));
-        }
-        Expr::String(s, _) => {
-            let label = self.store_string_literal(s);
-            code.push_str(&format!("    ; String: '{}'\n", s.replace("'", "''")));
-            code.push_str(&format!("    mov rsi, {}\n", label));
-        }
-        Expr::Var(name, _) => {
-            if let Some(ctx) = func_ctx {
-                if let Some(var_info) = ctx.get_local(name) {
-                    code.push_str(&format!("    ; Local variable: {} at [rbp - {}]\n", name, var_info.offset));
-                    code.push_str(&format!("    mov rax, [rbp - {}]\n", var_info.offset));
-                } else if let Some(symbol) = ctx.get_symbol(name) {
-                    code.push_str(&format!("    ; Function symbol: {}\n", name));
-                    code.push_str(&format!("    mov rax, [{}]\n", symbol.name));
-                } else {
-                    match self.get_variable_address(name) {
-                        Ok(address) => {
-                            code.push_str(&format!("    ; Global variable: {} (label: {})\n", name, address));
-                            code.push_str(&format!("    mov rax, [{}]\n", address));
-                        }
-                        Err(e) => return Err(e),
-                    }
-                }
-            } else {
-                match self.get_variable_address(name) {
-                    Ok(address) => {
-                        code.push_str(&format!("    ; Global variable: {} (label: {})\n", name, address));
-                        code.push_str(&format!("    mov rax, [{}]\n", address));
-                    }
-                    Err(e) => return Err(e),
-                }
-            }
-        }
-        Expr::UnaryOp { op, operand, span: _ } => {
-            // First compile the operand
-            code.push_str(&self.compile_expression_impl(operand, func_ctx)?);
-            
-            match op {
-                crate::parser::UnaryOp::Minus => {
-                    code.push_str("    ; Unary minus\n");
-                    code.push_str("    neg rax\n");
-                }
-                crate::parser::UnaryOp::Plus => {
-                    code.push_str("    ; Unary plus (no-op)\n");
-                    // Nothing to do - already in rax
-                }
-                crate::parser::UnaryOp::Not => {
-                    code.push_str("    ; Logical NOT\n");
-                    code.push_str("    test rax, rax\n");
-                    code.push_str("    sete al\n");
-                    code.push_str("    movzx rax, al\n");
-                }
-                crate::parser::UnaryOp::Invert => {
-                    code.push_str("    ; Bitwise NOT\n");
-                    code.push_str("    not rax\n");
-                }
-            }
-        }
-        Expr::Call { func, args, kwargs: _, span: _ } => {
-            if func == "print" {
-                if let Some(arg) = args.get(0) {
-                    match arg {
-                        Expr::Number(_n, _) => {
-                            code.push_str(&self.compile_expression_impl(arg, func_ctx)?);
-                            code.push_str("    call print_decimal_64\n");
-                        }
-                        Expr::String(s, _) => {
-                            let label = self.store_string_literal(s);
-                            code.push_str(&format!("    ; Print string: '{}'\n", s.replace("'", "''")));
-                            code.push_str(&format!("    mov rsi, {}\n", label));
-                            code.push_str("    mov rdi, rsi\n");
-                            code.push_str("    call print_string_64\n");
-                        }
-                        Expr::Var(_name, _) => {
-                            code.push_str(&self.compile_expression_impl(arg, func_ctx)?);
-                            code.push_str("    call print_decimal_64\n");
-                        }
-                        Expr::BinOp { left, op, right, span: _ } => {
-                            let left_code = self.compile_expression_impl(left, func_ctx)?;
-                            let right_code = self.compile_expression_impl(right, func_ctx)?;
-                            
-                            code.push_str(&left_code);
-                            code.push_str("    push rax\n");
-                            code.push_str(&right_code);
-                            code.push_str("    mov rbx, rax\n");
-                            code.push_str("    pop rax\n");
-                            
-                            match op {
-                                Op::Add => code.push_str("    add rax, rbx\n"),
-                                Op::Sub => code.push_str("    sub rax, rbx\n"),
-                                Op::Mul => code.push_str("    imul rax, rbx\n"),
-                                Op::Div => {
-                                    code.push_str("    xor rdx, rdx\n");
-                                    code.push_str("    idiv rbx\n");
-                                }
-                                Op::Mod => {
-                                    code.push_str("    xor rdx, rdx\n");
-                                    code.push_str("    div rbx\n");
-                                    code.push_str("    mov rax, rdx\n");
-                                }
-                                _ => return Err(format!("Unsupported operator in print: {:?}", op)),
-                            }
-                            
-                            code.push_str("    call print_decimal_64\n");
-                        }
-                        _ => return Err(format!("Unsupported print argument type: {:?}", arg)),
-                    }
-                } else {
-                    let label = self.store_string_literal("\n");
-                    code.push_str("    ; Empty print - newline\n");
-                    code.push_str(&format!("    mov rsi, {}\n", label));
-                    code.push_str("    mov rdi, rsi\n");
-                    code.push_str("    call print_string_64\n");
-                }
-            } else {
-                code.push_str(&format!("    ; Function call: {}\n", func));
-                
-                for (i, arg) in args.iter().enumerate() {
-                    let arg_code = self.compile_expression_impl(arg, func_ctx)?;
-                    code.push_str(&arg_code);
-                    
-                    match i {
-                        0 => code.push_str("    mov rdi, rax\n"),
-                        1 => code.push_str("    mov rsi, rax\n"),
-                        2 => code.push_str("    mov rdx, rax\n"),
-                        3 => code.push_str("    mov rcx, rax\n"),
-                        4 => code.push_str("    mov r8, rax\n"),
-                        5 => code.push_str("    mov r9, rax\n"),
-                        _ => {
-                            code.push_str("    push rax\n");
-                        }
-                    }
-                }
-                
-                if args.len() > 6 {
-                    let stack_args = args.len() - 6;
-                    if stack_args % 2 != 0 {
-                        code.push_str("    sub rsp, 8\n");
-                    }
-                }
-                
-                code.push_str(&format!("    call {}\n", func));
-                
-                if args.len() > 6 {
-                    let stack_args = args.len() - 6;
-                    code.push_str(&format!("    add rsp, {}\n", stack_args * 8));
-                }
-            }
-        }
-        Expr::BinOp { left, op, right, span: _ } => {
-            code.push_str(&self.compile_expression_impl(left, func_ctx)?);
-            code.push_str("    push rax\n");
-            
-            code.push_str(&self.compile_expression_impl(right, func_ctx)?);
-            code.push_str("    mov rbx, rax\n");
-            code.push_str("    pop rax\n");
-            
-            match op {
-                Op::Add => {
-                    code.push_str("    add rax, rbx\n");
-                }
-                Op::Sub => {
-                    code.push_str("    sub rax, rbx\n");
-                }
-                Op::Mul => {
-                    code.push_str("    imul rax, rbx\n");
-                }
-                Op::Div => {
-                    code.push_str("    xor rdx, rdx\n");
-                    code.push_str("    idiv rbx\n");
-                }
-                Op::Mod => {
-                    code.push_str("    xor rdx, rdx\n");
-                    code.push_str("    div rbx\n");
-                    code.push_str("    mov rax, rdx\n");
-                }
-                _ => {
-                    return Err(format!("Unsupported operator: {:?}", op));
-                }
-            }
-        }
-        Expr::Compare { left, ops, comparators, span: _ } => {
-            // Simple comparison with one operator
-            if ops.len() == 1 && comparators.len() == 1 {
-                let op = &ops[0];
-                let comparator = &comparators[0];
-                
-                // Compile left expression
-                code.push_str(&self.compile_expression_impl(left, func_ctx)?);
-                code.push_str("    push rax\n");
-                
-                // Compile comparator expression
-                code.push_str(&self.compile_expression_impl(comparator, func_ctx)?);
-                code.push_str("    mov rbx, rax\n");
-                code.push_str("    pop rax\n");
-                
-                // Compare and set result
-                code.push_str("    cmp rax, rbx\n");
-                
-                match op {
-                    CompareOp::Lt => {
-                        code.push_str("    setl al\n");
-                    }
-                    CompareOp::Gt => {
-                        code.push_str("    setg al\n");
-                    }
-                    CompareOp::Eq => {
-                        code.push_str("    sete al\n");
-                    }
-                    CompareOp::Ne => {
-                        code.push_str("    setne al\n");
-                    }
-                    CompareOp::Le => {
-                        code.push_str("    setle al\n");
-                    }
-                    CompareOp::Ge => {
-                        code.push_str("    setge al\n");
-                    }
-                    _ => {
-                        return Err(format!("Unsupported comparison operator: {:?}", op));
-                    }
-                }
-                
-                code.push_str("    movzx rax, al\n");
-            } else {
-                return Err("Complex comparisons not supported yet".to_string());
-            }
-        }
-        _ => {
-            return Err(format!("Unsupported expression type: {:?}", expr));
-        }
-    }
-    
-    Ok(code)
-}
-    
-    fn compile_statement(&mut self, stmt: &Statement, func_ctx: &mut FunctionContext) -> Result<String, String> {
-    let mut code = String::new();
-    
-    match stmt {
-        Statement::VarDecl { name, value, type_hint: _, span: _ } => {
-            let offset = func_ctx.allocate_local_variable(name, None)?;
-            
-            code.push_str(&format!("    ; Variable declaration: {} at [rbp - {}]\n", name, offset));
-            
-            {
-                let value_code = self.compile_expression_impl(value, &mut Some(func_ctx))?;
-                code.push_str(&value_code);
-            }
-            
-            code.push_str(&format!("    mov [rbp - {}], rax\n", offset));
-        }
-        Statement::Assign { target, value, span: _ } => {
-            if let Some(var_info) = func_ctx.get_local(target) {
-                let offset = var_info.offset;
-                code.push_str(&format!("    ; Assignment to local: {} at [rbp - {}]\n", target, offset));
-                
-                {
-                    let value_code = self.compile_expression_impl(value, &mut Some(func_ctx))?;
-                    code.push_str(&value_code);
-                }
-                
-                code.push_str(&format!("    mov [rbp - {}], rax\n", offset));
-            } else {
-                match self.get_variable_address(target) {
-                    Ok(address) => {
-                        code.push_str(&format!("    ; Assignment to global: {} (label: {})\n", target, address));
-                        
-                        {
-                            let value_code = self.compile_expression_impl(value, &mut Some(func_ctx))?;
-                            code.push_str(&value_code);
-                        }
-                        
-                        code.push_str(&format!("    mov [{}], rax\n", address));
-                    }
-                    Err(e) => return Err(e),
-                }
-            }
-        }
-        Statement::AugAssign { target, op, value, span: _ } => {
-            // Load current value
-            if let Some(var_info) = func_ctx.get_local(target) {
-                let offset = var_info.offset;
-                code.push_str(&format!("    ; Augmented assignment to local: {} at [rbp - {}]\n", target, offset));
-                
-                // Load current value
-                code.push_str(&format!("    mov rax, [rbp - {}]\n", offset));
-                code.push_str("    push rax\n");
-                
-                // Compile right-hand side
-                {
-                    let value_code = self.compile_expression_impl(value, &mut Some(func_ctx))?;
-                    code.push_str(&value_code);
-                }
-                
-                code.push_str("    mov rbx, rax\n");
-                code.push_str("    pop rax\n");
-                
-                // Perform operation
-                match op {
-                    Op::Add => code.push_str("    add rax, rbx\n"),
-                    Op::Sub => code.push_str("    sub rax, rbx\n"),
-                    Op::Mul => code.push_str("    imul rax, rbx\n"),
-                    Op::Div => {
-                        code.push_str("    xor rdx, rdx\n");
-                        code.push_str("    idiv rbx\n");
-                    }
-                    Op::Mod => {
-                        code.push_str("    xor rdx, rdx\n");
-                        code.push_str("    div rbx\n");
-                        code.push_str("    mov rax, rdx\n");
-                    }
-                    _ => return Err(format!("Unsupported augmented assignment operator: {:?}", op)),
-                }
-                
-                // Store back
-                code.push_str(&format!("    mov [rbp - {}], rax\n", offset));
-            } else {
-                match self.get_variable_address(target) {
-                    Ok(address) => {
-                        code.push_str(&format!("    ; Augmented assignment to global: {} (label: {})\n", target, address));
-                        
-                        // Load current value
-                        code.push_str(&format!("    mov rax, [{}]\n", address));
-                        code.push_str("    push rax\n");
-                        
-                        // Compile right-hand side
-                        {
-                            let value_code = self.compile_expression_impl(value, &mut Some(func_ctx))?;
-                            code.push_str(&value_code);
-                        }
-                        
-                        code.push_str("    mov rbx, rax\n");
-                        code.push_str("    pop rax\n");
-                        
-                        // Perform operation
-                        match op {
-                            Op::Add => code.push_str("    add rax, rbx\n"),
-                            Op::Sub => code.push_str("    sub rax, rbx\n"),
-                            Op::Mul => code.push_str("    imul rax, rbx\n"),
-                            Op::Div => {
-                                code.push_str("    xor rdx, rdx\n");
-                                code.push_str("    idiv rbx\n");
-                            }
-                            Op::Mod => {
-                                code.push_str("    xor rdx, rdx\n");
-                                code.push_str("    div rbx\n");
-                                code.push_str("    mov rax, rdx\n");
-                            }
-                            _ => return Err(format!("Unsupported augmented assignment operator: {:?}", op)),
-                        }
-                        
-                        // Store back
-                        code.push_str(&format!("    mov [{}], rax\n", address));
-                    }
-                    Err(e) => return Err(e),
-                }
-            }
-        }
-        Statement::Expr(expr) => {
-            code.push_str("    ; Expression statement\n");
-            {
-                let expr_code = self.compile_expression_impl(expr, &mut Some(func_ctx))?;
-                code.push_str(&expr_code);
-            }
-        }
-        Statement::Return(expr) => {
-            if let Some(expr) = expr {
-                code.push_str("    ; Return statement\n");
-                {
-                    let expr_code = self.compile_expression_impl(expr, &mut Some(func_ctx))?;
-                    code.push_str(&expr_code);
-                }
-            } else {
-                code.push_str("    xor rax, rax\n");
-            }
-            
-            if func_ctx.stack_size > 0 {
-                code.push_str(&format!("    add rsp, {}\n", func_ctx.stack_size));
-            }
-            
-            code.push_str("    mov rsp, rbp\n");
-            code.push_str("    pop rbp\n");
-            code.push_str("    ret\n");
-            
-            func_ctx.has_returned = true;
-        }
-        Statement::If { condition, then_block, elif_blocks, else_block, span: _ } => {
-            let label_id = self.get_next_label_id();
-            let else_label = format!("if_else_{}", label_id);
-            let end_label = format!("if_end_{}", label_id);
-            
-            code.push_str("    ; If condition\n");
-            {
-                let cond_code = self.compile_expression_impl(condition, &mut Some(func_ctx))?;
-                code.push_str(&cond_code);
-            }
-            
-            code.push_str("    test rax, rax\n");
-            code.push_str(&format!("    jz {}\n", else_label));
-            
-            code.push_str("    ; Then block\n");
-            for stmt in then_block {
-                let stmt_code = self.compile_statement(stmt, func_ctx)?;
-                code.push_str(&stmt_code);
-            }
-            code.push_str(&format!("    jmp {}\n", end_label));
-            
-            let mut current_else_label = else_label.clone();
-            for (i, (elif_cond, elif_body)) in elif_blocks.iter().enumerate() {
-                code.push_str(&format!("{}:\n", current_else_label));
-                
-                {
-                    let elif_cond_code = self.compile_expression_impl(elif_cond, &mut Some(func_ctx))?;
-                    code.push_str(&elif_cond_code);
-                }
-                
-                let next_label = if i < elif_blocks.len() - 1 || else_block.is_some() {
-                    format!("{}_elif_{}", current_else_label, i)
-                } else {
-                    end_label.clone()
-                };
-                
-                code.push_str("    test rax, rax\n");
-                code.push_str(&format!("    jz {}\n", next_label));
-                
-                for stmt in elif_body {
-                    let stmt_code = self.compile_statement(stmt, func_ctx)?;
-                    code.push_str(&stmt_code);
-                }
-                code.push_str(&format!("    jmp {}\n", end_label));
-                
-                code.push_str(&format!("{}:\n", next_label));
-                current_else_label = next_label;
-            }
-            
-            if let Some(else_body) = else_block {
-                if elif_blocks.is_empty() {
-                    code.push_str(&format!("{}:\n", else_label));
-                } else {
-                    code.push_str(&format!("{}:\n", current_else_label));
-                }
-                
-                code.push_str("    ; Else block\n");
-                for stmt in else_body {
-                    let stmt_code = self.compile_statement(stmt, func_ctx)?;
-                    code.push_str(&stmt_code);
-                }
-            } else if elif_blocks.is_empty() {
-                code.push_str(&format!("{}:\n", else_label));
-            }
-            
-            code.push_str(&format!("{}:\n", end_label));
-        }
-        Statement::While { condition, body, orelse: _, span: _ } => {
-            let label_id = self.get_next_label_id();
-            let while_start = format!("while_start_{}", label_id);
-            let while_end = format!("while_end_{}", label_id);
-            
-            // Push loop labels to stack
-            self.loop_stack.borrow_mut().push((while_start.clone(), while_end.clone()));
-            
-            code.push_str(&format!("{}:\n", while_start));
-            
-            code.push_str("    ; While condition\n");
-            {
-                let cond_code = self.compile_expression_impl(condition, &mut Some(func_ctx))?;
-                code.push_str(&cond_code);
-            }
-            
-            code.push_str("    test rax, rax\n");
-            code.push_str(&format!("    jz {}\n", while_end));
-            
-            code.push_str("    ; While body\n");
-            for stmt in body {
-                let stmt_code = self.compile_statement(stmt, func_ctx)?;
-                code.push_str(&stmt_code);
-            }
-            
-            code.push_str(&format!("    jmp {}\n", while_start));
-            code.push_str(&format!("{}:\n", while_end));
-            
-            // Pop loop labels from stack
-            self.loop_stack.borrow_mut().pop();
-        }
-        Statement::FunctionDef { name, args: _, body: _, span: _ } => {
-            // Nested function definitions are compiled separately in compile_program
-            code.push_str(&format!("    ; Function definition: {}\n", name));
-        }
-        Statement::HardwareFunctionDef { device, name, args: _, body: _, span: _ } => {
-            // Hardware function definitions are not supported in this context
-            code.push_str(&format!("    ; Hardware function definition: {} for device {}\n", name, device));
-            code.push_str("    ; Hardware functions must be defined at global scope\n");
-        }
-        Statement::Pass => {
-            code.push_str("    ; pass\n");
-        }
-        Statement::Break => {
-            if let Some((_, end_label)) = self.loop_stack.borrow().last() {
-                code.push_str("    ; break\n");
-                code.push_str(&format!("    jmp {}\n", end_label));
-            } else {
-                return Err("break outside loop".to_string());
-            }
-        }
-        Statement::Continue => {
-            if let Some((start_label, _)) = self.loop_stack.borrow().last() {
-                code.push_str("    ; continue\n");
-                code.push_str(&format!("    jmp {}\n", start_label));
-            } else {
-                return Err("continue outside loop".to_string());
-            }
-        }
-        Statement::Include { .. } => {
-            return Err("Include statements should have been processed in the frontend".to_string());
-        }
-    }
-    
-    Ok(code)
-}
-    
-    fn compile_function(&mut self, name: &str, args: &[String], body: &[Statement]) -> Result<String, String> {
-        let mut code = String::new();
-        let mut func_ctx = FunctionContext::new(name.to_string(), args.to_vec(), 
-                                               std::rc::Rc::clone(&self.memory_manager));
-        
-        *self.current_function.borrow_mut() = Some(name.to_string());
-        *self.current_stack_depth.borrow_mut() = 0;
-        
-        code.push_str(&format!("{}:\n", name));
-        code.push_str("    push rbp\n");
-        code.push_str("    mov rbp, rsp\n");
-        
-        let local_count = body.iter()
-            .filter(|stmt| matches!(stmt, Statement::VarDecl { .. }))
-            .count();
-        
-        if local_count > 0 {
-            let stack_size = ((local_count * 8) + 15) & !15;
-            code.push_str(&format!("    sub rsp, {}\n", stack_size));
-            func_ctx.stack_size = stack_size as i32;
-            *self.current_stack_depth.borrow_mut() = stack_size as i32;
-        }
-        
-        for (i, arg) in args.iter().enumerate() {
-            match i {
-                0 => {
-                    code.push_str(&format!("    ; {} -> rdi\n", arg));
-                    code.push_str("    mov [rbp - 8], rdi\n");
-                    func_ctx.allocate_local_variable(arg, Some("int".to_string()))?;
-                }
-                1 => {
-                    code.push_str(&format!("    ; {} -> rsi\n", arg));
-                    code.push_str("    mov [rbp - 16], rsi\n");
-                    func_ctx.allocate_local_variable(arg, Some("int".to_string()))?;
-                }
-                2 => {
-                    code.push_str(&format!("    ; {} -> rdx\n", arg));
-                    code.push_str("    mov [rbp - 24], rdx\n");
-                    func_ctx.allocate_local_variable(arg, Some("int".to_string()))?;
-                }
-                3 => {
-                    code.push_str(&format!("    ; {} -> rcx\n", arg));
-                    code.push_str("    mov [rbp - 32], rcx\n");
-                    func_ctx.allocate_local_variable(arg, Some("int".to_string()))?;
-                }
-                4 => {
-                    code.push_str(&format!("    ; {} -> r8\n", arg));
-                    code.push_str("    mov [rbp - 40], r8\n");
-                    func_ctx.allocate_local_variable(arg, Some("int".to_string()))?;
-                }
-                5 => {
-                    code.push_str(&format!("    ; {} -> r9\n", arg));
-                    code.push_str("    mov [rbp - 48], r9\n");
-                    func_ctx.allocate_local_variable(arg, Some("int".to_string()))?;
-                }
-                _ => {
-                    let stack_offset = 16 + (i - 6) * 8;
-                    code.push_str(&format!("    ; {} -> [rbp + {}]\n", arg, stack_offset));
-                    let offset = func_ctx.allocate_local_variable(arg, Some("int".to_string()))?;
-                    code.push_str(&format!("    mov rax, [rbp + {}]\n", stack_offset));
-                    code.push_str(&format!("    mov [rbp - {}], rax\n", offset));
-                }
-            }
-        }
-        
-        for stmt in body {
-            code.push_str(&self.compile_statement(stmt, &mut func_ctx)?);
-        }
-        
-        if !func_ctx.has_returned {
-            code.push_str("    ; Default return\n");
-            code.push_str("    xor rax, rax\n");
-            
-            if func_ctx.stack_size > 0 {
-                code.push_str(&format!("    add rsp, {}\n", func_ctx.stack_size));
-            }
-            code.push_str("    mov rsp, rbp\n");
-            code.push_str("    pop rbp\n");
-            code.push_str("    ret\n");
-        }
-        
-        *self.current_function.borrow_mut() = None;
-        *self.current_stack_depth.borrow_mut() = 0;
-        
-        Ok(code)
-    }
-    
-    fn compile_hardware_function_def(&self, device: &str, name: &str, args: &[String], body: &[Statement]) -> Result<String, String> {
-        let mut asm = String::new();
-        
-        asm.push_str(&format!("; Hardware function: {} for device {}\n", name, device));
-        asm.push_str(&format!("{}_hw_{}:\n", name, device));
-        asm.push_str("    push rbp\n");
-        asm.push_str("    mov rbp, rsp\n");
-        asm.push_str("    push rbx\n");
-        asm.push_str("    push rcx\n");
-        asm.push_str("    push rdx\n");
-        asm.push_str("    push rsi\n");
-        asm.push_str("    push rdi\n");
-        asm.push_str(&format!("    ; Device: {}, Function: {}\n", device, name));
-        
-        if !args.is_empty() {
-            asm.push_str(&format!("    ; {} argument(s): {}\n", args.len(), args.join(", ")));
-            for (i, arg) in args.iter().enumerate() {
-                match i {
-                    0 => asm.push_str(&format!("    ; {} -> rdi\n", arg)),
-                    1 => asm.push_str(&format!("    ; {} -> rsi\n", arg)),
-                    2 => asm.push_str(&format!("    ; {} -> rdx\n", arg)),
-                    3 => asm.push_str(&format!("    ; {} -> rcx\n", arg)),
-                    4 => asm.push_str(&format!("    ; {} -> r8\n", arg)),
-                    5 => asm.push_str(&format!("    ; {} -> r9\n", arg)),
-                    _ => asm.push_str(&format!("    ; {} -> stack\n", arg)),
-                }
-            }
-        }
-        
-        asm.push_str("    ; Hardware function body\n");
-        for stmt in body {
-            asm.push_str(&format!("    ; Statement: {:?}\n", stmt));
-        }
-        
-        asm.push_str("    ; Hardware function cleanup\n");
-        asm.push_str("    pop rdi\n");
-        asm.push_str("    pop rsi\n");
-        asm.push_str("    pop rdx\n");
-        asm.push_str("    pop rcx\n");
-        asm.push_str("    pop rbx\n");
-        asm.push_str("    mov rsp, rbp\n");
-        asm.push_str("    pop rbp\n");
-        asm.push_str("    ret\n");
-        
-        Ok(asm)
-    }
-}
-
-impl Backend for Bios64Backend {
-    fn name(&self) -> &str {
-        "bios64"
-    }
-    
-    fn generate_header(&self) -> String {
-        let mut header = String::from("; BIOS 64-bit Single-Stage Boot System\n");
-        header.push_str("; Boots directly from 0x7C00 and enters 64-bit mode\n\n");
-        
-        header
-    }
-    
-    fn format(&self) -> &'static str {
-        "bin"
-    }
-    
-    fn supported_capabilities(&self) -> Vec<Capability> {
-        let mut caps = vec![
-            Capability::BIOS,
-            Capability::LongMode64,
-            Capability::PureMetal,
-            Capability::Paging,
-        ];
-        
-        if self.use_sse {
-            caps.push(Capability::SSE);
-            caps.push(Capability::SSE2);
-        }
-        
-        if self.use_avx {
-            caps.push(Capability::AVX);
-        }
-        
-        if self.use_avx512 {
-            caps.push(Capability::AVX512);
-        }
-        
-        caps
-    }
-    
-    
-    fn compile_program(&mut self, program: &Program) -> Result<String, String> {
-    let mut asm = String::new();
-    
-    asm.push_str("; Earthang BIOS 64-bit Single-Stage Boot System\n");
-    asm.push_str("; Generated from Earthang AST\n\n");
-    
-    // Single-stage boot at 0x7C00
-    asm.push_str("    org 0x7C00\n");
-    asm.push_str("    bits 16\n\n");
-    
-    asm.push_str("start:\n");
-    asm.push_str("    ; Disable interrupts - CRITICAL!\n");
-    asm.push_str("    cli\n");
-    asm.push_str("\n");
-    asm.push_str("    ; Save boot drive (passed by BIOS in dl)\n");
-    asm.push_str("    mov [boot_drive], dl\n");
-    asm.push_str("\n");
-    asm.push_str("    ; Set up segment registers\n");
-    asm.push_str("    xor ax, ax\n");
-    asm.push_str("    mov ds, ax\n");
-    asm.push_str("    mov es, ax\n");
-    asm.push_str("    mov ss, ax\n");
-    asm.push_str("    mov sp, 0x7C00\n");
-    asm.push_str("\n");
-    asm.push_str("    ; Enable interrupts ONLY for BIOS calls\n");
-    asm.push_str("    sti\n");
-    asm.push_str("    cld\n");
-    asm.push_str("\n");
-    asm.push_str("    ; Clear screen\n");
-    asm.push_str("    mov ax, 0x0003\n");
-    asm.push_str("    int 0x10\n");
-    asm.push_str("\n");
-    asm.push_str("    ; Print loading message\n");
-    asm.push_str("    mov si, loading_msg\n");
-    asm.push_str("    call print_string_16\n");
-    asm.push_str("\n");
-    
-    // Disable interrupts before disk operations
-    asm.push_str("    ; Disable interrupts for disk operations\n");
-    asm.push_str("    cli\n");
-    asm.push_str("\n");
-    
-    // Reset disk system
-    asm.push_str("    ; Reset disk system\n");
-    asm.push_str("    xor ax, ax\n");
-    asm.push_str("    mov dl, [boot_drive]\n");
-    asm.push_str("    int 0x13\n");
-    asm.push_str("    jc disk_error\n");
-    asm.push_str("\n");
-    
-    // Load additional sectors to 0x7E00
-    asm.push_str("    ; Load additional sectors using LBA\n");
-    asm.push_str("    mov ah, 0x42\n");
-    asm.push_str("    mov dl, [boot_drive]\n");
-    asm.push_str("    mov si, dap\n");
-    asm.push_str("    int 0x13\n");
-    asm.push_str("    jc disk_error\n");
-    asm.push_str("    ; Jump to extended code - interrupts STAY DISABLED!\n");
-    asm.push_str("    jmp 0x7E00\n\n");
-    
-    // Disk Address Packet structure
-    asm.push_str("dap:\n");
-    asm.push_str("    db 0x10\n");
-    asm.push_str("    db 0\n");
-    asm.push_str("    dw 32\n");        // Load 32 sectors (16KB)
-    asm.push_str("    dw 0x7E00\n");
-    asm.push_str("    dw 0x0000\n");
-    asm.push_str("    dd 1\n");         // Starting LBA (sector 2, 0-based)
-    asm.push_str("    dd 0\n");
-    
-    asm.push_str("disk_error:\n");
-    asm.push_str("    mov si, disk_err_msg\n");
-    asm.push_str("    call print_string_16\n");
-    asm.push_str("    jmp $\n\n");
-    
-    asm.push_str("; 16-bit print function\n");
-    asm.push_str("print_string_16:\n");
-    asm.push_str("    pusha\n");
-    asm.push_str("    mov ah, 0x0E\n");
-    asm.push_str(".print_loop_16:\n");
-    asm.push_str("    lodsb\n");
-    asm.push_str("    test al, al\n");
-    asm.push_str("    jz .print_done_16\n");
-    asm.push_str("    int 0x10\n");
-    asm.push_str("    jmp .print_loop_16\n");
-    asm.push_str(".print_done_16:\n");
-    asm.push_str("    popa\n");
-    asm.push_str("    ret\n\n");
-    
-    // Add messages and variables at the end of the boot sector
-    asm.push_str("; Variables\n");
-    asm.push_str("boot_drive:\n");
-    asm.push_str("    db 0\n\n");
-    
-    asm.push_str("loading_msg:\n");
-    asm.push_str("    db 'Earthang Boot', 0\n");
-    asm.push_str("disk_err_msg:\n");
-    asm.push_str("    db 'Disk error!', 0\n");
-    
-    // Pad to 510 bytes and add boot signature
-    asm.push_str("\n    times 510-($-$$) db 0\n");
-    asm.push_str("    dw 0xAA55\n\n");
-    
-    // ============================================
-    // Everything below this line is loaded at 0x7E00 (sector 2+)
-    // ============================================
-    
-    asm.push_str("; ============================================\n");
-    asm.push_str("; Extended code loaded at 0x7E00\n");
-    asm.push_str("; ============================================\n\n");
-    
-    // Start at 0x7E00 with interrupts DISABLED
-    asm.push_str("    bits 16\n");
-    asm.push_str("    ; INTERRUPTS MUST STAY DISABLED FROM HERE ON!\n");
-    asm.push_str("    cli\n");
-    asm.push_str("\n");
-    
-    // Collect string literals from the program
-    self.collect_string_literals(program);
-    
-    // Fast A20 line enable
-    asm.push_str("    ; Enable A20 line\n");
-    asm.push_str("    in al, 0x92\n");
-    asm.push_str("    or al, 2\n");
-    asm.push_str("    out 0x92, al\n");
-    asm.push_str("\n");
-    
-    // Load 32-bit GDT - CRITICAL: interrupts must stay off!
-    asm.push_str("    ; Load 32-bit GDT\n");
-    asm.push_str("    lgdt [gdt32_desc]\n");
-    asm.push_str("\n");
-    
-    // Enter protected mode
-    asm.push_str("    ; Enter protected mode (interrupts STAY disabled)\n");
-    asm.push_str("    mov eax, cr0\n");
-    asm.push_str("    or eax, 1\n");
-    asm.push_str("    mov cr0, eax\n");
-    asm.push_str("\n");
-    asm.push_str("    ; Far jump to protected mode\n");
-    asm.push_str("    jmp 0x08:protected_mode\n");
-    asm.push_str("\n");
-    
-    // 32-bit protected mode
-    asm.push_str("    bits 32\n");
-    asm.push_str("protected_mode:\n");
-    asm.push_str("    ; Set up segment registers\n");
-    asm.push_str("    mov ax, 0x10\n");
-    asm.push_str("    mov ds, ax\n");
-    asm.push_str("    mov es, ax\n");
-    asm.push_str("    mov fs, ax\n");
-    asm.push_str("    mov gs, ax\n");
-    asm.push_str("    mov ss, ax\n");
-    asm.push_str("    mov esp, 0x90000\n");
-    asm.push_str("\n");
-    
-    // Setup null IDT for protected mode
-    asm.push_str("    ; Setup null IDT for protected mode\n");
-    asm.push_str("    lidt [idtr_32]\n");
-    asm.push_str("\n");
-    
-    // Paging setup for 64-bit mode
-    asm.push_str("    ; Setup paging for 64-bit mode\n");
-    asm.push_str("    mov edi, 0x1000\n");
-    asm.push_str("    mov cr3, edi\n");
-    asm.push_str("    xor eax, eax\n");
-    asm.push_str("    mov ecx, 4096\n");
-    asm.push_str("    rep stosd\n");
-    asm.push_str("\n");
-    asm.push_str("    mov edi, 0x1000\n");
-    asm.push_str("    mov dword [edi], 0x2003\n");
-    asm.push_str("    add edi, 0x1000\n");
-    asm.push_str("    mov dword [edi], 0x3003\n");
-    asm.push_str("    add edi, 0x1000\n");
-    asm.push_str("\n");
-    asm.push_str("    mov ebx, 0x00000083\n");
-    asm.push_str("    mov ecx, 512\n");
-    asm.push_str(".set_entry:\n");
-    asm.push_str("    mov dword [edi], ebx\n");
-    asm.push_str("    add ebx, 0x200000\n");
-    asm.push_str("    add edi, 8\n");
-    asm.push_str("    loop .set_entry\n");
-    asm.push_str("\n");
-    
-    // Enable PAE
-    asm.push_str("    ; Enable PAE\n");
-    asm.push_str("    mov eax, cr4\n");
-    asm.push_str("    or eax, (1 << 5)\n");
-    asm.push_str("    mov cr4, eax\n");
-    asm.push_str("\n");
-    
-    // Set CR3 again
-    asm.push_str("    ; Set CR3 again\n");
-    asm.push_str("    mov eax, 0x1000\n");
-    asm.push_str("    mov cr3, eax\n");
-    asm.push_str("\n");
-    
-    // Enable long mode in EFER
-    asm.push_str("    ; Enable long mode in EFER\n");
-    asm.push_str("    mov ecx, 0xC0000080\n");
-    asm.push_str("    rdmsr\n");
-    asm.push_str("    or eax, (1 << 8)\n");
-    asm.push_str("    wrmsr\n");
-    asm.push_str("\n");
-    
-    // Enable paging
-    asm.push_str("    ; Enable paging\n");
-    asm.push_str("    mov eax, cr0\n");
-    asm.push_str("    or eax, (1 << 31)\n");
-    asm.push_str("    mov cr0, eax\n");
-    asm.push_str("\n");
-    
-    // Load 64-bit GDT
-    asm.push_str("    ; Load 64-bit GDT\n");
-    asm.push_str("    lgdt [gdt64_desc]\n");
-    asm.push_str("\n");
-    
-    // Jump to long mode
-    asm.push_str("    ; Jump to long mode\n");
-    asm.push_str("    jmp 0x08:long_mode\n");
-    asm.push_str("\n");
-    
-    // 64-bit long mode
-    asm.push_str("    bits 64\n");
-    asm.push_str("long_mode:\n");
-    asm.push_str("    ; Set up segment registers for 64-bit\n");
-    asm.push_str("    mov ax, 0x10\n");
-    asm.push_str("    mov ds, ax\n");
-    asm.push_str("    mov es, ax\n");
-    asm.push_str("    mov fs, ax\n");
-    asm.push_str("    mov gs, ax\n");
-    asm.push_str("    mov ss, ax\n");
-    asm.push_str("    mov rsp, 0x90000\n");
-    asm.push_str("\n");
-    asm.push_str("    ; Setup null IDT for 64-bit mode\n");
-    asm.push_str("    lidt [idtr_64]\n");
-    asm.push_str("\n");
-    asm.push_str("    ; Interrupts remain DISABLED in 64-bit mode\n");
-    asm.push_str("    ; (don't have interrupt handlers set up)\n");
-    asm.push_str("\n");
-    
-    // Clear screen for 64-bit mode
-    asm.push_str("    ; Clear screen\n");
-    asm.push_str("    mov rdi, 0xB8000\n");
-    asm.push_str("    mov rax, 0x0720072007200720\n");
-    asm.push_str("    mov rcx, 1000\n");
-    asm.push_str("    rep stosq\n");
-    asm.push_str("\n");
-    
-    // Initialize data section base register
-    asm.push_str("    ; Initialize data section base register\n");
-    asm.push_str("    mov r15, 0x200000\n");
-    asm.push_str("\n");
-    
-    // Print welcome message
-    let welcome_label = self.store_string_literal("Earthang 64-bit Mode");
-    asm.push_str("    ; Print welcome message\n");
-    asm.push_str(&format!("    mov rsi, {}\n", welcome_label));
-    asm.push_str("    call print_string_64\n\n");
-    
-    let mut functions = Vec::new();
-    let mut main_statements = Vec::new();
-    let mut global_vars = Vec::new();
-    
-    // First pass: collect all global variables, functions, and main statements
-    for stmt in &program.body {
-        match stmt {
-            Statement::VarDecl { name, value, type_hint: _, span: _ } => {
-                global_vars.push((name.clone(), value.clone()));
-            }
-            Statement::FunctionDef { name, args, body, span: _ } => {
-                functions.push((name.clone(), args.clone(), body.clone()));
-            }
-            Statement::HardwareFunctionDef { device, name, args, body, span: _ } => {
-                let hw_code = self.compile_hardware_function_def(device, name, args, body)?;
-                asm.push_str(&hw_code);
-                asm.push_str("\n");
-            }
-            _ => {
-                main_statements.push(stmt.clone());
-            }
-        }
-    }
-    
-    // Initialize global variables
-    for (name, value) in global_vars {
-        match value {
-            Expr::Number(n, _) => {
-                // Allocate initialized global variable
-                let _ = self.allocate_global_variable(&name, 8, "int", Some(n.to_string()))?;
-                asm.push_str(&format!("    ; Global variable: {} = {}\n", name, n));
-                asm.push_str(&format!("    mov rax, {}\n", n));
-                let address = self.get_variable_address(&name)?;
-                asm.push_str(&format!("    mov [{}], rax\n", address));
-            }
-            Expr::String(s, _) => {
-                let label = self.store_string_literal(&s);
-                // Allocate pointer to string
-                let _ = self.allocate_global_variable(&name, 8, "string", Some(label.clone()))?;
-                asm.push_str(&format!("    ; Global string: {} = '{}'\n", name, s.replace("'", "''")));
-                asm.push_str(&format!("    mov rax, {}\n", label));
-                let address = self.get_variable_address(&name)?;
-                asm.push_str(&format!("    mov [{}], rax\n", address));
-            }
-            Expr::BinOp { left, op, right, span: _ } => {
-                // Calculate value at runtime
-                let _ = self.allocate_global_variable(&name, 8, "int", None)?;
-                asm.push_str(&format!("    ; Global variable: {} = expression\n", name));
-                
-                let mut dummy_ctx = None;
-                let left_code = self.compile_expression_impl(&left, &mut dummy_ctx)?;
-                let right_code = self.compile_expression_impl(&right, &mut dummy_ctx)?;
-                
-                asm.push_str(&left_code);
-                asm.push_str("    push rax\n");
-                asm.push_str(&right_code);
-                asm.push_str("    mov rbx, rax\n");
-                asm.push_str("    pop rax\n");
-                
-                match op {
-                    Op::Add => asm.push_str("    add rax, rbx\n"),
-                    Op::Sub => asm.push_str("    sub rax, rbx\n"),
-                    Op::Mul => asm.push_str("    imul rax, rbx\n"),
-                    Op::Div => {
-                        asm.push_str("    xor rdx, rdx\n");
-                        asm.push_str("    idiv rbx\n");
-                    }
-                    _ => return Err(format!("Unsupported operator in global: {:?}", op)),
-                }
-                
-                let address = self.get_variable_address(&name)?;
-                asm.push_str(&format!("    mov [{}], rax\n", address));
-            }
-            _ => {
-                // Other expression types
-                let _ = self.allocate_global_variable(&name, 8, "int", None)?;
-                asm.push_str(&format!("    ; Global variable: {}\n", name));
-                let mut dummy_ctx = None;
-                let value_code = self.compile_expression_impl(&value, &mut dummy_ctx)?;
-                asm.push_str(&value_code);
-                let address = self.get_variable_address(&name)?;
-                asm.push_str(&format!("    mov [{}], rax\n", address));
-            }
-        }
-        asm.push_str("\n");
-    }
-    
-    // Generate main program code
-    if !main_statements.is_empty() {
-        asm.push_str("    ; Main program code\n");
-        
-        let mut main_ctx = FunctionContext::new("main".to_string(), vec![], 
-                                               std::rc::Rc::clone(&self.memory_manager));
-        
-        for stmt in main_statements {
-            match stmt {
-                Statement::Expr(expr) => {
-                    let mut ctx_ref = Some(&mut main_ctx);
-                    let expr_code = self.compile_expression_impl(&expr, &mut ctx_ref)?;
-                    asm.push_str(&expr_code);
-                }
-                Statement::Assign { target, value, span: _ } => {
-                    if let Ok(address) = self.get_variable_address(&target) {
-                        asm.push_str(&format!("    ; Assignment to global: {}\n", target));
-                        let mut ctx_ref = Some(&mut main_ctx);
-                        let value_code = self.compile_expression_impl(&value, &mut ctx_ref)?;
-                        asm.push_str(&value_code);
-                        asm.push_str(&format!("    mov [{}], rax\n", address));
-                    } else {
-                        return Err(format!("Undefined variable: {}", target));
-                    }
-                }
-                Statement::If { condition, then_block, elif_blocks, else_block, span: _ } => {
-                    let label_id = self.get_next_label_id();
-                    let else_label = format!("main_if_else_{}", label_id);
-                    let end_label = format!("main_if_end_{}", label_id);
-                    
-                    let mut ctx_ref = Some(&mut main_ctx);
-                    let cond_code = self.compile_expression_impl(&condition, &mut ctx_ref)?;
-                    asm.push_str(&cond_code);
-                    
-                    asm.push_str("    test rax, rax\n");
-                    asm.push_str(&format!("    jz {}\n", else_label));
-                    
-                    for stmt in then_block {
-                        let stmt_code = self.compile_statement(&stmt, &mut main_ctx)?;
-                        asm.push_str(&stmt_code);
-                    }
-                    asm.push_str(&format!("    jmp {}\n", end_label));
-                    
-                    for (elif_cond, elif_body) in &elif_blocks {
-                        asm.push_str(&format!("{}:\n", else_label));
-                        let mut ctx_ref = Some(&mut main_ctx);
-                        let elif_cond_code = self.compile_expression_impl(&elif_cond, &mut ctx_ref)?;
-                        asm.push_str(&elif_cond_code);
-                        asm.push_str("    test rax, rax\n");
-                        asm.push_str(&format!("    jz {}_elif\n", else_label));
-                        
-                        for stmt in elif_body {
-                            let stmt_code = self.compile_statement(&stmt, &mut main_ctx)?;
-                            asm.push_str(&stmt_code);
-                        }
-                        asm.push_str(&format!("    jmp {}\n", end_label));
-                        asm.push_str(&format!("{}_elif:\n", else_label));
-                    }
-                    
-                    if let Some(else_body) = else_block {
-                        if elif_blocks.is_empty() {
-                            asm.push_str(&format!("{}:\n", else_label));
-                        }
-                        
-                        for stmt in else_body {
-                            let stmt_code = self.compile_statement(&stmt, &mut main_ctx)?;
-                            asm.push_str(&stmt_code);
-                        }
-                    } else if elif_blocks.is_empty() {
-                        asm.push_str(&format!("{}:\n", else_label));
-                    }
-                    
-                    asm.push_str(&format!("{}:\n", end_label));
-                }
-                Statement::While { condition, body, orelse: _, span: _ } => {
-                    let label_id = self.get_next_label_id();
-                    let while_start = format!("main_while_start_{}", label_id);
-                    let while_end = format!("main_while_end_{}", label_id);
-                    
-                    asm.push_str(&format!("{}:\n", while_start));
-                    
-                    let mut ctx_ref = Some(&mut main_ctx);
-                    let cond_code = self.compile_expression_impl(&condition, &mut ctx_ref)?;
-                    asm.push_str(&cond_code);
-                    
-                    asm.push_str("    test rax, rax\n");
-                    asm.push_str(&format!("    jz {}\n", while_end));
-                    
-                    for stmt in body {
-                        let stmt_code = self.compile_statement(&stmt, &mut main_ctx)?;
-                        asm.push_str(&stmt_code);
-                    }
-                    
-                    asm.push_str(&format!("    jmp {}\n", while_start));
-                    asm.push_str(&format!("{}:\n", while_end));
-                }
-                _ => {
-                    asm.push_str(&format!("    ; [Statement type not handled in main: {:?}]\n", stmt));
-                }
-            }
-        }
-        
-        if main_ctx.stack_size > 0 {
-            asm.push_str(&format!("    add rsp, {}\n", main_ctx.stack_size));
-        }
-    }
-    
-    // Compile functions
-    for (name, args, body) in functions {
-        asm.push_str(&format!("\n; Function: {}\n", name));
-        let func_code = self.compile_function(&name, &args, &body)?;
-        asm.push_str(&func_code);
-    }
-    
-    // Generate utility functions
-    asm.push_str(&self.generate_utility_functions());
-    
-    // Generate GDT and IDT tables
-    asm.push_str("; ============================================\n");
-    asm.push_str("; GDT and IDT Tables\n");
-    asm.push_str("; ============================================\n\n");
-    
-    asm.push_str("gdt32:\n");
-    asm.push_str("    dq 0x0000000000000000\n");
-    asm.push_str("    dq 0x00CF9A000000FFFF\n");
-    asm.push_str("    dq 0x00CF92000000FFFF\n");
-    asm.push_str("gdt32_end:\n\n");
-    
-    asm.push_str("gdt32_desc:\n");
-    asm.push_str("    dw gdt32_end - gdt32 - 1\n");
-    asm.push_str("    dd gdt32\n\n");
-    
-    asm.push_str("gdt64:\n");
-    asm.push_str("    dq 0x0000000000000000\n");
-    asm.push_str("    dq 0x00209A0000000000\n");
-    asm.push_str("    dq 0x0000920000000000\n");
-    asm.push_str("gdt64_end:\n\n");
-    
-    asm.push_str("gdt64_desc:\n");
-    asm.push_str("    dw gdt64_end - gdt64 - 1\n");
-    asm.push_str("    dq gdt64\n\n");
-    
-    asm.push_str("idtr_32:\n");
-    asm.push_str("    dw 0        ; Limit (0 = no IDT)\n");
-    asm.push_str("    dd 0        ; Base (null)\n\n");
-    
-    asm.push_str("idtr_64:\n");
-    asm.push_str("    dw 0        ; Limit (0 = no IDT)\n");
-    asm.push_str("    dq 0        ; Base (null)\n\n");
-    
-    // Generate data sections
-    asm.push_str(&self.generate_data_section());
-    asm.push_str(&self.generate_bss_section());
-    
-    // Pad the binary to ensure all sectors are present
-    asm.push_str("\n    ; Pad to ensure have enough sectors\n");
-    asm.push_str("    times 16384 - ($ - $$) db 0  ; 32 sectors total (16KB)\n");
-    
-    Ok(asm)
-}
-    
-    fn compile_expression(&mut self, expr: &Expr) -> Result<String, String> {
-        let mut dummy_ctx = None;
-        self.compile_expression_impl(expr, &mut dummy_ctx)
-    }
-    
-    fn function_prologue(&self, func: &BackendFunction) -> String {
-        let mut prologue = String::new();
-        prologue.push_str(&format!("{}:\n", func.name));
-        prologue.push_str("    push rbp\n");
-        prologue.push_str("    mov rbp, rsp\n");
-        
-        let stack_size = func.parameters.len() * 8;
-        if stack_size > 0 {
-            prologue.push_str(&format!("    sub rsp, {}\n", stack_size));
-        }
-        
-        prologue
-    }
-    
-    fn function_epilogue(&self, _func: &BackendFunction) -> String {
-        let mut epilogue = String::new();
-        epilogue.push_str("    mov rsp, rbp\n");
-        epilogue.push_str("    pop rbp\n");
-        epilogue.push_str("    ret\n");
-        epilogue
-    }
-    
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
     }
 }
 
@@ -2557,6 +485,7 @@ pub struct Linux64Backend {
     symbol_table: RefCell<HashMap<String, VariableInfo>>,
     current_stack_offset: RefCell<i32>,
     label_counter: RefCell<u32>,
+    hardware_dsl: RefCell<Option<HardwareDSL>>, // Changed to RefCell<Option<HardwareDSL>>
 }
 
 impl Linux64Backend {
@@ -2567,7 +496,13 @@ impl Linux64Backend {
             symbol_table: RefCell::new(HashMap::new()),
             current_stack_offset: RefCell::new(0),
             label_counter: RefCell::new(0),
+            hardware_dsl: RefCell::new(None), // Initialize as None in RefCell
         }
+    }
+
+    pub fn with_hardware_dsl(mut self, dsl: HardwareDSL) -> Self {
+        self.hardware_dsl = RefCell::new(Some(dsl));
+        self
     }
 
     // RBP-RELATIVE ADDRESSING (FIXED VERSION)
@@ -2617,14 +552,14 @@ impl Linux64Backend {
     }
     
     fn generate_string_data(&self) -> String {
-        let literals = self.string_literals.borrow();
-        let mut data = String::new();
-        for (content, label) in &*literals {
-            data.push_str(&format!("{}:\n", label));
-            data.push_str(&format!("    db '{}', 0\n", content.replace("'", "''")));
-        }
-        data
+    let literals = self.string_literals.borrow();
+    let mut data = String::new();
+    for (content, label) in &*literals {
+        data.push_str(&format!("{}:\n", label));
+        data.push_str(&format!("    .asciz \"{}\"\n", content.replace("\"", "\\\"")));
     }
+    data
+}
     
     fn get_next_label_id(&self) -> u32 {
         let mut counter = self.label_counter.borrow_mut();
@@ -2634,201 +569,216 @@ impl Linux64Backend {
     }
     
     fn generate_helper_function(&self) -> String {
-        let mut helpers = String::new();
-        
-        helpers.push_str("; Simple print string function\n");
-        helpers.push_str("print_string:\n");
-        helpers.push_str("    ; Input: rdi = string address\n");
-        helpers.push_str("    push rax\n");
-        helpers.push_str("    push rdi\n");
-        helpers.push_str("    push rsi\n");
-        helpers.push_str("    push rdx\n");
-        helpers.push_str("    \n");
-        helpers.push_str("    ; Calculate length\n");
-        helpers.push_str("    mov rsi, rdi\n");
-        helpers.push_str("    xor rdx, rdx\n");
-        helpers.push_str(".count_loop:\n");
-        helpers.push_str("    cmp byte [rsi + rdx], 0\n");
-        helpers.push_str("    je .count_done\n");
-        helpers.push_str("    inc rdx\n");
-        helpers.push_str("    jmp .count_loop\n");
-        helpers.push_str(".count_done:\n");
-        helpers.push_str("    \n");
-        helpers.push_str("    ; Write to stdout\n");
-        helpers.push_str("    mov rax, 1\n");
-        helpers.push_str("    mov rdi, 1\n");
-        helpers.push_str("    syscall\n");
-        helpers.push_str("    \n");
-        helpers.push_str("    ; Restore registers\n");
-        helpers.push_str("    pop rdx\n");
-        helpers.push_str("    pop rsi\n");
-        helpers.push_str("    pop rdi\n");
-        helpers.push_str("    pop rax\n");
-        helpers.push_str("    ret\n\n");
+    let mut helpers = String::new();
+    
+    helpers.push_str("print_string:\n");
+    helpers.push_str("    push rax\n");
+    helpers.push_str("    push rdi\n");
+    helpers.push_str("    push rsi\n");
+    helpers.push_str("    push rdx\n");
+    helpers.push_str("    #\n");
+    helpers.push_str("    mov rsi, rdi\n");
+    helpers.push_str("    xor rdx, rdx\n");
+    helpers.push_str(".count_loop:\n");
+    helpers.push_str("    cmp BYTE PTR [rsi + rdx], 0\n");
+    helpers.push_str("    je .count_done\n");
+    helpers.push_str("    inc rdx\n");
+    helpers.push_str("    jmp .count_loop\n");
+    helpers.push_str(".count_done:\n");
+    helpers.push_str("    #\n");
+    helpers.push_str("    mov rax, 1\n");
+    helpers.push_str("    mov rdi, 1\n");
+    helpers.push_str("    syscall\n");
+    helpers.push_str("    #\n");
+    helpers.push_str("    pop rdx\n");
+    helpers.push_str("    pop rsi\n");
+    helpers.push_str("    pop rdi\n");
+    helpers.push_str("    pop rax\n");
+    helpers.push_str("    ret\n\n");
 
-        helpers.push_str("; Print decimal number\n");
-        helpers.push_str("print_decimal:\n");
-        helpers.push_str("    ; Input: rax = integer\n");
-        helpers.push_str("    push rbp\n");
-        helpers.push_str("    mov rbp, rsp\n");
-        helpers.push_str("    sub rsp, 32\n");
-        helpers.push_str("    \n");
-        helpers.push_str("    ; Save registers\n");
-        helpers.push_str("    push rbx\n");
-        helpers.push_str("    push rcx\n");
-        helpers.push_str("    push rdx\n");
-        helpers.push_str("    push rsi\n");
-        helpers.push_str("    push rdi\n");
-        helpers.push_str("    \n");
-        helpers.push_str("    ; Save the number\n");
-        helpers.push_str("    mov [rbp - 8], rax\n");
-        helpers.push_str("    \n");
-        helpers.push_str("    ; Point to buffer end\n");
-        helpers.push_str("    lea rdi, [rsp + 31]\n");
-        helpers.push_str("    mov byte [rdi], 0\n");
-        helpers.push_str("    \n");
-        helpers.push_str("    ; Handle negative numbers\n");
-        helpers.push_str("    mov rax, [rbp - 8]\n");
-        helpers.push_str("    test rax, rax\n");
-        helpers.push_str("    jns .positive\n");
-        helpers.push_str("    neg rax\n");
-        helpers.push_str("    \n");
-        helpers.push_str(".positive:\n");
-        helpers.push_str("    mov rbx, 10\n");
-        helpers.push_str("    \n");
-        helpers.push_str(".convert_loop:\n");
-        helpers.push_str("    xor rdx, rdx\n");
-        helpers.push_str("    div rbx\n");
-        helpers.push_str("    add dl, '0'\n");
-        helpers.push_str("    dec rdi\n");
-        helpers.push_str("    mov [rdi], dl\n");
-        helpers.push_str("    test rax, rax\n");
-        helpers.push_str("    jnz .convert_loop\n");
-        helpers.push_str("    \n");
-        helpers.push_str("    ; Add minus sign if needed\n");
-        helpers.push_str("    mov rax, [rbp - 8]\n");
-        helpers.push_str("    test rax, rax\n");
-        helpers.push_str("    jns .print_it\n");
-        helpers.push_str("    dec rdi\n");
-        helpers.push_str("    mov byte [rdi], '-'\n");
-        helpers.push_str("    \n");
-        helpers.push_str(".print_it:\n");
-        helpers.push_str("    ; Calculate length\n");
-        helpers.push_str("    lea rsi, [rsp + 32]\n");
-        helpers.push_str("    sub rsi, rdi\n");
-        helpers.push_str("    \n");
-        helpers.push_str("    ; Print the number\n");
-        helpers.push_str("    mov rax, 1\n");
-        helpers.push_str("    mov rdx, rsi\n");
-        helpers.push_str("    mov rsi, rdi\n");
-        helpers.push_str("    mov rdi, 1\n");
-        helpers.push_str("    syscall\n");
-        helpers.push_str("    \n");
-        helpers.push_str("    ; Print newline\n");
-        helpers.push_str("    mov rax, 1\n");
-        helpers.push_str("    mov rdi, 1\n");
-        helpers.push_str("    lea rsi, [newline]\n");
-        helpers.push_str("    mov rdx, 1\n");
-        helpers.push_str("    syscall\n");
-        helpers.push_str("    \n");
-        helpers.push_str("    ; Restore registers\n");
-        helpers.push_str("    pop rdi\n");
-        helpers.push_str("    pop rsi\n");
-        helpers.push_str("    pop rdx\n");
-        helpers.push_str("    pop rcx\n");
-        helpers.push_str("    pop rbx\n");
-        helpers.push_str("    \n");
-        helpers.push_str("    mov rsp, rbp\n");
-        helpers.push_str("    pop rbp\n");
-        helpers.push_str("    ret\n\n");
-        
-        helpers.push_str("; Print newline\n");
-        helpers.push_str("print_newline:\n");
-        helpers.push_str("    push rax\n");
-        helpers.push_str("    push rdi\n");
-        helpers.push_str("    push rsi\n");
-        helpers.push_str("    push rdx\n");
-        helpers.push_str("    \n");
-        helpers.push_str("    mov rax, 1\n");
-        helpers.push_str("    mov rdi, 1\n");
-        helpers.push_str("    lea rsi, [newline]\n");
-        helpers.push_str("    mov rdx, 1\n");
-        helpers.push_str("    syscall\n");
-        helpers.push_str("    \n");
-        helpers.push_str("    pop rdx\n");
-        helpers.push_str("    pop rsi\n");
-        helpers.push_str("    pop rdi\n");
-        helpers.push_str("    pop rax\n");
-        helpers.push_str("    ret\n");
-        
-        helpers
-    }
+    helpers.push_str("print_decimal:\n");
+    helpers.push_str("    # Input: rax = integer\n");
+    helpers.push_str("    push rbp\n");
+    helpers.push_str("    mov rbp, rsp\n");
+    helpers.push_str("    sub rsp, 32\n");
+    helpers.push_str("    #\n");
+    helpers.push_str("    push rbx\n");
+    helpers.push_str("    push rcx\n");
+    helpers.push_str("    push rdx\n");
+    helpers.push_str("    push rsi\n");
+    helpers.push_str("    push rdi\n");
+    helpers.push_str("    #\n");
+    helpers.push_str("    mov QWORD PTR [rbp - 8], rax\n");
+    helpers.push_str("    #\n");
+    helpers.push_str("    lea rdi, [rsp + 31]\n");
+    helpers.push_str("    mov BYTE PTR [rdi], 0\n");
+    helpers.push_str("    #\n");
+    helpers.push_str("    mov rax, QWORD PTR [rbp - 8]\n");
+    helpers.push_str("    test rax, rax\n");
+    helpers.push_str("    jns .positive\n");
+    helpers.push_str("    neg rax\n");
+    helpers.push_str("    #\n");
+    helpers.push_str(".positive:\n");
+    helpers.push_str("    mov rbx, 10\n");
+    helpers.push_str("    #\n");
+    helpers.push_str(".convert_loop:\n");
+    helpers.push_str("    xor rdx, rdx\n");
+    helpers.push_str("    div rbx\n");
+    helpers.push_str("    add dl, '0'\n");
+    helpers.push_str("    dec rdi\n");
+    helpers.push_str("    mov BYTE PTR [rdi], dl\n");
+    helpers.push_str("    test rax, rax\n");
+    helpers.push_str("    jnz .convert_loop\n");
+    helpers.push_str("    #\n");
+    helpers.push_str("    mov rax, QWORD PTR [rbp - 8]\n");
+    helpers.push_str("    test rax, rax\n");
+    helpers.push_str("    jns .print_it\n");
+    helpers.push_str("    dec rdi\n");
+    helpers.push_str("    mov BYTE PTR [rdi], '-'\n");
+    helpers.push_str("    #\n");
+    helpers.push_str(".print_it:\n");
+    helpers.push_str("    lea rsi, [rsp + 32]\n");
+    helpers.push_str("    sub rsi, rdi\n");
+    helpers.push_str("    #\n");
+    helpers.push_str("    mov rax, 1\n");
+    helpers.push_str("    mov rdx, rsi\n");
+    helpers.push_str("    mov rsi, rdi\n");
+    helpers.push_str("    mov rdi, 1\n");
+    helpers.push_str("    syscall\n");
+    helpers.push_str("    #\n");
+    helpers.push_str("    mov rax, 1\n");
+    helpers.push_str("    mov rdi, 1\n");
+    helpers.push_str("    lea rsi, [newline]\n");
+    helpers.push_str("    mov rdx, 1\n");
+    helpers.push_str("    syscall\n");
+    helpers.push_str("    #\n");
+    helpers.push_str("    pop rdi\n");
+    helpers.push_str("    pop rsi\n");
+    helpers.push_str("    pop rdx\n");
+    helpers.push_str("    pop rcx\n");
+    helpers.push_str("    pop rbx\n");
+    helpers.push_str("    #\n");
+    helpers.push_str("    mov rsp, rbp\n");
+    helpers.push_str("    pop rbp\n");
+    helpers.push_str("    ret\n\n");
+    
+    helpers.push_str("print_newline:\n");
+    helpers.push_str("    push rax\n");
+    helpers.push_str("    push rdi\n");
+    helpers.push_str("    push rsi\n");
+    helpers.push_str("    push rdx\n");
+    helpers.push_str("    #\n");
+    helpers.push_str("    mov rax, 1\n");
+    helpers.push_str("    mov rdi, 1\n");
+    helpers.push_str("    lea rsi, [newline]\n");
+    helpers.push_str("    mov rdx, 1\n");
+    helpers.push_str("    syscall\n");
+    helpers.push_str("    #\n");
+    helpers.push_str("    pop rdx\n");
+    helpers.push_str("    pop rsi\n");
+    helpers.push_str("    pop rdi\n");
+    helpers.push_str("    pop rax\n");
+    helpers.push_str("    ret\n");
+    
+    helpers
+}
     
     fn compile_statement_in_context(&mut self, stmt: &Statement) -> Result<String, String> {
-        let mut code = String::new();
-        
-        match stmt {
-            Statement::Expr(expr) => {
-                code.push_str(&self.compile_expression(&expr)?);
-            }
-            Statement::VarDecl { name, value, type_hint: _, span: _ } => {
-                code.push_str(&format!("    ; Variable declaration: {}\n", name));
-                let offset = self.allocate_variable_rbp_relative(&name);
-                let value_code = self.compile_expression(&value)?;
-                code.push_str(&value_code);
-                let abs_offset = self.get_absolute_offset(offset);
-                code.push_str(&format!("    mov [rbp - {}], rax\n", abs_offset));
-            }
-            Statement::Assign { target, value, span: _ } => {
-                code.push_str(&format!("    ; Assignment to {}\n", target));
-                let offset = self.ensure_variable_exists_rbp_relative(&target);
-                let value_code = self.compile_expression(&value)?;
-                code.push_str(&value_code);
-                let abs_offset = self.get_absolute_offset(offset);
-                code.push_str(&format!("    mov [rbp - {}], rax\n", abs_offset));
-            }
-            Statement::AugAssign { target, op, value, span: _ } => {
-                code.push_str(&format!("    ; Augmented assignment to {}\n", target));
-                let offset = self.ensure_variable_exists_rbp_relative(&target);
-                let abs_offset = self.get_absolute_offset(offset);
-                
-                // Load current value
-                code.push_str(&format!("    mov rax, [rbp - {}]\n", abs_offset));
-                code.push_str("    push rax\n");
-                
-                // Compile right-hand side
-                let value_code = self.compile_expression(&value)?;
-                code.push_str(&value_code);
-                
-                code.push_str("    mov rbx, rax\n");
-                code.push_str("    pop rax\n");
-                
-                // Perform operation
-                match op {
-                    Op::Add => code.push_str("    add rax, rbx\n"),
-                    Op::Sub => code.push_str("    sub rax, rbx\n"),
-                    Op::Mul => code.push_str("    imul rax, rbx\n"),
-                    Op::Div => {
-                        code.push_str("    xor rdx, rdx\n");
-                        code.push_str("    idiv rbx\n");
-                    }
-                    Op::Mod => {
-                        code.push_str("    xor rdx, rdx\n");
-                        code.push_str("    div rbx\n");
-                        code.push_str("    mov rax, rdx\n");
-                    }
-                    _ => return Err(format!("Unsupported augmented assignment operator: {:?}", op)),
-                }
-                
-                // Store back
-                code.push_str(&format!("    mov [rbp - {}], rax\n", abs_offset));
-            }
-            _ => {
-                code.push_str(&format!("    ; [Statement type not handled in context: {:?}]\n", stmt));
-            }
+    let mut code = String::new();
+    
+    match stmt {
+        Statement::Expr(expr) => {
+            code.push_str(&self.compile_expression(&expr)?);
         }
-        
-        Ok(code)
+        Statement::VarDecl { name, value, type_hint: _, span: _ } => {
+            code.push_str(&format!("    # Variable declaration: {}\n", name));
+            let offset = self.allocate_variable_rbp_relative(&name);
+            let value_code = self.compile_expression(&value)?;
+            code.push_str(&value_code);
+            let abs_offset = self.get_absolute_offset(offset);
+            code.push_str(&format!("    mov QWORD PTR [rbp - {}], rax\n", abs_offset));
+        }
+        Statement::Assign { target, value, span: _ } => {
+            code.push_str(&format!("    # Assignment to {}\n", target));
+            let offset = self.ensure_variable_exists_rbp_relative(&target);
+            let value_code = self.compile_expression(&value)?;
+            code.push_str(&value_code);
+            let abs_offset = self.get_absolute_offset(offset);
+            code.push_str(&format!("    mov QWORD PTR [rbp - {}], rax\n", abs_offset));
+        }
+        Statement::AugAssign { target, op, value, span: _ } => {
+            code.push_str(&format!("    # Augmented assignment to {}\n", target));
+            let offset = self.ensure_variable_exists_rbp_relative(&target);
+            let abs_offset = self.get_absolute_offset(offset);
+            
+            // Load current value
+            code.push_str(&format!("    mov rax, QWORD PTR [rbp - {}]\n", abs_offset));
+            code.push_str("    push rax\n");
+            
+            // Compile right-hand side
+            let value_code = self.compile_expression(&value)?;
+            code.push_str(&value_code);
+            
+            code.push_str("    mov rbx, rax\n");
+            code.push_str("    pop rax\n");
+            
+            // Perform operation
+            match op {
+                Op::Add => code.push_str("    add rax, rbx\n"),
+                Op::Sub => code.push_str("    sub rax, rbx\n"),
+                Op::Mul => code.push_str("    imul rax, rbx\n"),
+                Op::Div => {
+                    code.push_str("    xor rdx, rdx\n");
+                    code.push_str("    idiv rbx\n");
+                }
+                Op::Mod => {
+                    code.push_str("    xor rdx, rdx\n");
+                    code.push_str("    div rbx\n");
+                    code.push_str("    mov rax, rdx\n");
+                }
+                _ => return Err(format!("Unsupported augmented assignment operator: {:?}", op)),
+            }
+            
+            // Store back
+            code.push_str(&format!("    mov QWORD PTR [rbp - {}], rax\n", abs_offset));
+        }
+        Statement::HardwareFunctionDef { device, name, args: _, body, span: _ } => {
+            // Compile hardware function using DSL
+            code.push_str(&format!("    # Hardware function: {} for device {}\n", name, device));
+            
+            // Generate prologue first
+            let prologue = if let Some(ref dsl) = *self.hardware_dsl.borrow() {
+                dsl.generate_device_function_prologue(&device, &name)
+                    .unwrap_or_else(|e| format!("; Error generating prologue: {}\n", e))
+            } else {
+                String::from("    ; Hardware DSL not available\n")
+            };
+            code.push_str(&prologue);
+            
+            // Compile body statements
+            for body_stmt in body {
+                code.push_str(&self.compile_statement_in_context(body_stmt)?);
+            }
+            
+            // Generate epilogue
+            let epilogue = if let Some(ref dsl) = *self.hardware_dsl.borrow() {
+                dsl.generate_device_function_epilogue(&device)
+                    .unwrap_or_else(|e| format!("; Error generating epilogue: {}\n", e))
+            } else {
+                String::from("    ; Hardware DSL not available\n")
+            };
+            code.push_str(&epilogue);
+        }
+        Statement::HardwareDecl { device: _, config: _, span: _ } => {
+            // Handle hardware declaration
+            code.push_str("    # Hardware declaration (ignored in context)\n");
+        }
+        _ => {
+            code.push_str(&format!("    # [Statement type not handled in context: {:?}]\n", stmt));
+        }
+    }
+    
+    Ok(code)
     }
 }
 
@@ -2838,8 +788,18 @@ impl Backend for Linux64Backend {
     }
     
     fn generate_header(&self) -> String {
-        String::from("; Linux 64-bit Backend\n    bits 64\n    default rel\n\n    section .text\n    global _start\n\n")
-    }
+    String::from("    .intel_syntax noprefix
+    .section .text
+    .globl _start
+
+_start:
+    mov rbp, rsp
+    and rsp, -16        # 16-byte align stack
+    call main
+    mov rdi, rax        # exit code
+    mov rax, 60         # syscall: exit
+    syscall\n\n")
+}
     
     fn format(&self) -> &'static str {
         "elf64"
@@ -2854,499 +814,571 @@ impl Backend for Linux64Backend {
     }
     
     fn compile_program(&mut self, program: &Program) -> Result<String, String> {
-        let mut asm = String::new();
-        
-        asm.push_str("; Earthang Linux 64-bit Backend\n");
-        asm.push_str("; Generated from Earthang AST\n\n");
-        asm.push_str("    bits 64\n");
-        asm.push_str("    default rel\n\n");
-        
-        asm.push_str("    section .text\n");
-        asm.push_str("    global _start\n\n");
-        
-        asm.push_str("_start:\n");
-        asm.push_str("    ; Set up stack\n");
-        asm.push_str("    mov rbp, rsp\n");
-        asm.push_str("    and rsp, -16        ; 16-byte align stack\n");
-        asm.push_str("    \n");
-        asm.push_str("    ; Call main function\n");
-        asm.push_str("    call main\n");
-        asm.push_str("    \n");
-        asm.push_str("    ; Exit program\n");
-        asm.push_str("    mov rdi, rax        ; exit code\n");
-        asm.push_str("    mov rax, 60         ; syscall: exit\n");
-        asm.push_str("    syscall\n\n");
-        
-        asm.push_str("main:\n");
-        asm.push_str("    ; Function prologue\n");
-        asm.push_str("    push rbp\n");
-        asm.push_str("    mov rbp, rsp\n");
-        
-        // FIRST PASS: Allocate variables and track maximum negative offset
-        {
-            let mut offset = self.current_stack_offset.borrow_mut();
-            *offset = 0;  // RBP itself is at offset 0
-            self.symbol_table.borrow_mut().clear();
-        }
-        
-        // Track the most negative offset need
-        let mut max_negative_offset = 0;
-        
-        // Walk through program to allocate all variables
-        for stmt in &program.body {
-            match stmt {
-                Statement::VarDecl { name, .. } => {
-                    let offset = self.allocate_variable_rbp_relative(name);
-                    if offset < max_negative_offset {
-                        max_negative_offset = offset;
-                    }
+    let mut asm = String::new();
+
+    // GAS directives for Intel syntax
+    asm.push_str("    .intel_syntax noprefix\n");
+    asm.push_str("    .section .text\n");
+    asm.push_str("    .globl _start\n\n");
+    
+    asm.push_str("_start:\n");
+    asm.push_str("    mov rbp, rsp\n");
+    asm.push_str("    and rsp, -16        # 16-byte align stack\n");
+    asm.push_str("    \n");
+    asm.push_str("    call main\n");
+    asm.push_str("    \n");
+    asm.push_str("    mov rdi, rax        # exit code\n");
+    asm.push_str("    mov rax, 60         # syscall: exit\n");
+    asm.push_str("    syscall\n\n");
+    
+    asm.push_str("main:\n");
+    asm.push_str("    push rbp\n");
+    asm.push_str("    mov rbp, rsp\n");
+    
+    // Allocate variables and track maximum negative offset
+    {
+        let mut offset = self.current_stack_offset.borrow_mut();
+        *offset = 0;  // RBP itself is at offset 0
+        self.symbol_table.borrow_mut().clear();
+    }
+    
+    // Track the most negative offset need
+    let mut max_negative_offset = 0;
+    
+    // Walk through program to allocate all variables
+    for stmt in &program.body {
+        match stmt {
+            Statement::VarDecl { name, .. } => {
+                let offset = self.allocate_variable_rbp_relative(name);
+                if offset < max_negative_offset {
+                    max_negative_offset = offset;
                 }
-                Statement::Assign { target, .. } => {
-                    let offset = self.ensure_variable_exists_rbp_relative(target);
-                    if offset < max_negative_offset {
-                        max_negative_offset = offset;
-                    }
-                }
-                Statement::AugAssign { target, .. } => {
-                    let offset = self.ensure_variable_exists_rbp_relative(target);
-                    if offset < max_negative_offset {
-                        max_negative_offset = offset;
-                    }
-                }
-                _ => {}
             }
+            Statement::Assign { target, .. } => {
+                let offset = self.ensure_variable_exists_rbp_relative(target);
+                if offset < max_negative_offset {
+                    max_negative_offset = offset;
+                }
+            }
+            Statement::AugAssign { target, .. } => {
+                let offset = self.ensure_variable_exists_rbp_relative(target);
+                if offset < max_negative_offset {
+                    max_negative_offset = offset;
+                }
+            }
+            _ => {}
         }
-        
-        // Allocate stack space based on the most negative offset
-        // Since offsets are negative, need to allocate -max_negative_offset bytes
-        if max_negative_offset < 0 {
-            let stack_space = (-max_negative_offset + 15) & !15;  // Round up to 16 bytes
-            asm.push_str(&format!("    sub rsp, {}        ; Allocate {} bytes for locals\n", stack_space, stack_space));
-            asm.push_str(&format!("    ; Variables span from [rbp - 8] to [rbp - {}]\n", -max_negative_offset));
-        }
-        
-        asm.push_str("\n");
-        
-        // SECOND PASS: Compile the statements
-        for stmt in &program.body {
-            match stmt {
-                Statement::Expr(expr) => {
-                    let expr_code = self.compile_expression(expr)?;
-                    asm.push_str(&expr_code);
-                }
-                Statement::VarDecl { name, value, type_hint: _, span: _ } => {
-                    asm.push_str(&format!("    ; Variable declaration: {}\n", name));
+    }
+    
+    // Allocate stack space based on the most negative offset
+    // Since offsets are negative, need to allocate -max_negative_offset bytes
+    if max_negative_offset < 0 {
+        let stack_space = (-max_negative_offset + 15) & !15;
+        asm.push_str(&format!("    sub rsp, {}        # Allocate {} bytes for locals\n", stack_space, stack_space));
+        asm.push_str(&format!("    # Variables span from [rbp - 8] to [rbp - {}]\n", -max_negative_offset));
+    }
+    
+    asm.push_str("\n");
+    
+    for stmt in &program.body {
+        match stmt {
+            Statement::Expr(expr) => {
+                let expr_code = self.compile_expression(expr)?;
+                asm.push_str(&expr_code);
+            }
+            Statement::VarDecl { name, value, type_hint: _, span: _ } => {
+                if let Some(offset) = self.get_variable_offset_rbp_relative(name) {
+                    // Compile the value
+                    let value_code = self.compile_expression(value)?;
+                    asm.push_str(&value_code);
                     
-                    if let Some(offset) = self.get_variable_offset_rbp_relative(name) {
-                        // Compile the value
-                        let value_code = self.compile_expression(value)?;
-                        asm.push_str(&value_code);
-                        
-                        // Store to stack at [rbp - abs_offset]
-                        let abs_offset = self.get_absolute_offset(offset);
-                        asm.push_str(&format!("    mov [rbp - {}], rax\n", abs_offset));
-                    } else {
-                        return Err(format!("Variable {} not allocated", name));
-                    }
+                    // Store to stack at [rbp - abs_offset]
+                    let abs_offset = self.get_absolute_offset(offset);
+                    asm.push_str(&format!("    mov QWORD PTR [rbp - {}], rax\n", abs_offset));
+                } else {
+                    return Err(format!("Variable {} not allocated", name));
                 }
-                Statement::Assign { target, value, span: _ } => {
-                    asm.push_str(&format!("    ; Assignment to {}\n", target));
+            }
+            Statement::Assign { target, value, span: _ } => {
+                asm.push_str(&format!("    # Assignment to {}\n", target));
+                
+                if let Some(offset) = self.get_variable_offset_rbp_relative(target) {
+                    let value_code = self.compile_expression(value)?;
+                    asm.push_str(&value_code);
                     
-                    if let Some(offset) = self.get_variable_offset_rbp_relative(target) {
-                        // Compile the value
-                        let value_code = self.compile_expression(value)?;
-                        asm.push_str(&value_code);
-                        
-                        // Store to stack
-                        let abs_offset = self.get_absolute_offset(offset);
-                        asm.push_str(&format!("    mov [rbp - {}], rax\n", abs_offset));
-                    } else {
-                        return Err(format!("Variable {} not found", target));
-                    }
+                    let abs_offset = self.get_absolute_offset(offset);
+                    asm.push_str(&format!("    mov QWORD PTR [rbp - {}], rax\n", abs_offset));
+                } else {
+                    return Err(format!("Variable {} not found", target));
                 }
-                Statement::AugAssign { target, op, value, span: _ } => {
-                    asm.push_str(&format!("    ; Augmented assignment to {} with {:?}\n", target, op));
+            }
+            Statement::AugAssign { target, op, value, span: _ } => {
+                if let Some(offset) = self.get_variable_offset_rbp_relative(target) {
+                    let abs_offset = self.get_absolute_offset(offset);
                     
-                    if let Some(offset) = self.get_variable_offset_rbp_relative(target) {
-                        let abs_offset = self.get_absolute_offset(offset);
-                        
-                        // Load current value
-                        asm.push_str(&format!("    mov rax, [rbp - {}]\n", abs_offset));
-                        asm.push_str("    push rax\n");
-                        
-                        // Compile right-hand side
-                        let value_code = self.compile_expression(value)?;
-                        asm.push_str(&value_code);
-                        
-                        asm.push_str("    mov rbx, rax\n");
-                        asm.push_str("    pop rax\n");
-                        
-                        // Perform operation
-                        match op {
-                            Op::Add => asm.push_str("    add rax, rbx\n"),
-                            Op::Sub => asm.push_str("    sub rax, rbx\n"),
-                            Op::Mul => asm.push_str("    imul rax, rbx\n"),
-                            Op::Div => {
-                                asm.push_str("    xor rdx, rdx\n");
-                                asm.push_str("    idiv rbx\n");
-                            }
-                            Op::Mod => {
-                                asm.push_str("    xor rdx, rdx\n");
-                                asm.push_str("    div rbx\n");
-                                asm.push_str("    mov rax, rdx\n");
-                            }
-                            _ => return Err(format!("Unsupported augmented assignment operator: {:?}", op)),
+                    asm.push_str(&format!("    mov rax, QWORD PTR [rbp - {}]\n", abs_offset));
+                    asm.push_str("    push rax\n");
+                    
+                    // Compile right-hand side
+                    let value_code = self.compile_expression(value)?;
+                    asm.push_str(&value_code);
+                    
+                    asm.push_str("    mov rbx, rax\n");
+                    asm.push_str("    pop rax\n");
+                    
+                    // Perform operation
+                    match op {
+                        Op::Add => asm.push_str("    add rax, rbx\n"),
+                        Op::Sub => asm.push_str("    sub rax, rbx\n"),
+                        Op::Mul => asm.push_str("    imul rax, rbx\n"),
+                        Op::Div => {
+                            asm.push_str("    xor rdx, rdx\n");
+                            asm.push_str("    idiv rbx\n");
                         }
-                        
-                        // Store back
-                        asm.push_str(&format!("    mov [rbp - {}], rax\n", abs_offset));
-                    } else {
-                        return Err(format!("Variable {} not found", target));
+                        Op::Mod => {
+                            asm.push_str("    xor rdx, rdx\n");
+                            asm.push_str("    div rbx\n");
+                            asm.push_str("    mov rax, rdx\n");
+                        }
+                        _ => return Err(format!("Unsupported augmented assignment operator: {:?}", op)),
                     }
+                    
+                    // Store back
+                    asm.push_str(&format!("    mov QWORD PTR [rbp - {}], rax\n", abs_offset));
+                } else {
+                    return Err(format!("Variable {} not found", target));
                 }
-                Statement::If { condition, then_block, elif_blocks, else_block, span: _ } => {
-                    let label_id = self.get_next_label_id();
-                    let else_label = format!("if_else_{}", label_id);
-                    let end_label = format!("if_end_{}", label_id);
-                    
-                    asm.push_str("    ; If condition\n");
-                    let cond_code = self.compile_expression(condition)?;
-                    asm.push_str(&cond_code);
-                    
+            }
+            Statement::If { condition, then_block, elif_blocks, else_block, span: _ } => {
+                let label_id = self.get_next_label_id();
+                let else_label = format!("if_else_{}", label_id);
+                let end_label = format!("if_end_{}", label_id);
+                
+                asm.push_str("    # If condition\n");
+                let cond_code = self.compile_expression(condition)?;
+                asm.push_str(&cond_code);
+                
+                asm.push_str("    test rax, rax\n");
+                asm.push_str(&format!("    jz {}\n", else_label));
+                
+                asm.push_str("    # Then block\n");
+                for stmt in then_block {
+                    let stmt_code = self.compile_statement_in_context(stmt)?;
+                    asm.push_str(&stmt_code);
+                }
+                asm.push_str(&format!("    jmp {}\n", end_label));
+                
+                // Process elif blocks
+                for (elif_cond, elif_body) in elif_blocks {
+                    asm.push_str(&format!("{}:\n", else_label));
+                    let elif_cond_code = self.compile_expression(elif_cond)?;
+                    asm.push_str(&elif_cond_code);
                     asm.push_str("    test rax, rax\n");
-                    asm.push_str(&format!("    jz {}\n", else_label));
+                    asm.push_str(&format!("    jz {}_elif\n", else_label));
                     
-                    asm.push_str("    ; Then block\n");
-                    for stmt in then_block {
+                    asm.push_str("    # Elif body\n");
+                    for stmt in elif_body {
                         let stmt_code = self.compile_statement_in_context(stmt)?;
                         asm.push_str(&stmt_code);
                     }
                     asm.push_str(&format!("    jmp {}\n", end_label));
-                    
-                    // Process elif blocks
-                    for (elif_cond, elif_body) in elif_blocks {
-                        asm.push_str(&format!("{}:\n", else_label));
-                        let elif_cond_code = self.compile_expression(elif_cond)?;
-                        asm.push_str(&elif_cond_code);
-                        asm.push_str("    test rax, rax\n");
-                        asm.push_str(&format!("    jz {}_elif\n", else_label));
-                        
-                        asm.push_str("    ; Elif body\n");
-                        for stmt in elif_body {
-                            let stmt_code = self.compile_statement_in_context(stmt)?;
-                            asm.push_str(&stmt_code);
-                        }
-                        asm.push_str(&format!("    jmp {}\n", end_label));
-                        asm.push_str(&format!("{}_elif:\n", else_label));
-                    }
-                    
-                    // Process else block
-                    if let Some(else_body) = else_block {
-                        if elif_blocks.is_empty() {
-                            asm.push_str(&format!("{}:\n", else_label));
-                        }
-                        
-                        asm.push_str("    ; Else block\n");
-                        for stmt in else_body {
-                            let stmt_code = self.compile_statement_in_context(stmt)?;
-                            asm.push_str(&stmt_code);
-                        }
-                    } else if elif_blocks.is_empty() {
+                    asm.push_str(&format!("{}_elif:\n", else_label));
+                }
+                
+                // Process else block
+                if let Some(else_body) = else_block {
+                    if elif_blocks.is_empty() {
                         asm.push_str(&format!("{}:\n", else_label));
                     }
                     
-                    asm.push_str(&format!("{}:\n", end_label));
-                }
-                Statement::While { condition, body, orelse: _, span: _ } => {
-    let label_id = self.get_next_label_id();
-    let while_start = format!("while_start_{}", label_id);
-    let while_end = format!("while_end_{}", label_id);
-    
-    asm.push_str("    ; While loop\n");
-    asm.push_str(&format!("{}:\n", while_start));
-    
-    // Compile condition
-    let cond_code = self.compile_expression(condition)?;
-    asm.push_str(&cond_code);
-    
-    asm.push_str("    test rax, rax\n");
-    asm.push_str(&format!("    jz {}\n", while_end));
-    
-    asm.push_str("    ; While body\n");
-    for stmt in body {
-        let stmt_code = self.compile_statement_in_context(stmt)?;
-        asm.push_str(&stmt_code);
-    }
-    
-    // Jump back to start (AFTER the body, but BEFORE the end label)
-    asm.push_str(&format!("    jmp {}\n", while_start));
-    
-    // End label
-    asm.push_str(&format!("{}:\n", while_end));
-}
-                Statement::FunctionDef { name, args, body, span: _ } => {
-                    // Skip function compilation for now
-                    asm.push_str(&format!("    ; Function definition: {}\n", name));
-                }
-                Statement::HardwareFunctionDef { device, name, args, body, span: _ } => {
-                    asm.push_str(&format!("    ; Hardware function: {} for device {}\n", name, device));
-                }
-                Statement::Return(expr) => {
-                    asm.push_str("    ; Return statement\n");
-                    if let Some(expr) = expr {
-                        let expr_code = self.compile_expression(expr)?;
-                        asm.push_str(&expr_code);
-                    } else {
-                        asm.push_str("    xor rax, rax\n");
+                    asm.push_str("    # Else block\n");
+                    for stmt in else_body {
+                        let stmt_code = self.compile_statement_in_context(stmt)?;
+                        asm.push_str(&stmt_code);
                     }
-                    asm.push_str("    jmp .main_epilogue\n");
+                } else if elif_blocks.is_empty() {
+                    asm.push_str(&format!("{}:\n", else_label));
                 }
-                Statement::Pass => asm.push_str("    ; pass\n"),
-                Statement::Break => asm.push_str("    ; break\n"),
-                Statement::Continue => asm.push_str("    ; continue\n"),
-                Statement::Include { filename, span: _ } => {
-                    asm.push_str(&format!("    ; Include: {}\n", filename));
+                
+                asm.push_str(&format!("{}:\n", end_label));
+            }
+            Statement::While { condition, body, orelse: _, span: _ } => {
+                let label_id = self.get_next_label_id();
+                let while_start = format!("while_start_{}", label_id);
+                let while_end = format!("while_end_{}", label_id);
+                
+                asm.push_str("    # While loop\n");
+                asm.push_str(&format!("{}:\n", while_start));
+                
+                // Compile condition
+                let cond_code = self.compile_expression(condition)?;
+                asm.push_str(&cond_code);
+                
+                asm.push_str("    test rax, rax\n");
+                asm.push_str(&format!("    jz {}\n", while_end));
+                
+                asm.push_str("    # While body\n");
+                for stmt in body {
+                    let stmt_code = self.compile_statement_in_context(stmt)?;
+                    asm.push_str(&stmt_code);
                 }
+                
+                // Jump back to start
+                asm.push_str(&format!("    jmp {}\n", while_start));
+                
+                // End label
+                asm.push_str(&format!("{}:\n", while_end));
+            }
+            Statement::FunctionDef { name, args, body, span: _ } => {
+                // Skip function compilation for now
+                asm.push_str(&format!("    # Function definition: {}\n", name));
+            }
+            Statement::HardwareFunctionDef { device, name, args: _, body, span: _ } => {
+                // Handle hardware function definition
+                asm.push_str(&format!("    # Hardware function: {} for device {}\n", name, device));
+                
+                // Generate prologue first
+                let prologue = if let Some(ref dsl) = *self.hardware_dsl.borrow() {
+                    dsl.generate_device_function_prologue(&device, &name)
+                        .unwrap_or_else(|e| format!("; Error generating prologue: {}\n", e))
+                } else {
+                    String::from("    ; Hardware DSL not available\n")
+                };
+                asm.push_str(&prologue);
+                
+                // Compile body statements
+                for body_stmt in body {
+                    let stmt_code = self.compile_statement_in_context(body_stmt)?;
+                    asm.push_str(&stmt_code);
+                }
+                
+                // Generate epilogue
+                let epilogue = if let Some(ref dsl) = *self.hardware_dsl.borrow() {
+                    dsl.generate_device_function_epilogue(&device)
+                        .unwrap_or_else(|e| format!("; Error generating epilogue: {}\n", e))
+                } else {
+                    String::from("    ; Hardware DSL not available\n")
+                };
+                asm.push_str(&epilogue);
+            }
+            Statement::HardwareDecl { device, config: _, span: _ } => {
+                // Handle hardware declaration
+                asm.push_str(&format!("    # Hardware declaration: {}\n", device));
+                // We might need to generate configuration code here
+                // For now, just ignore
+            }
+            Statement::Return(expr) => {
+                asm.push_str("    # Return statement\n");
+                if let Some(expr) = expr {
+                    let expr_code = self.compile_expression(expr)?;
+                    asm.push_str(&expr_code);
+                } else {
+                    asm.push_str("    xor rax, rax\n");
+                }
+                asm.push_str("    jmp .main_epilogue\n");
+            }
+            Statement::Pass => asm.push_str("    # pass\n"),
+            Statement::Break => asm.push_str("    # break\n"),
+            Statement::Continue => asm.push_str("    # continue\n"),
+            Statement::Include { filename, span: _ } => {
+                asm.push_str(&format!("    # Include: {}\n", filename));
             }
         }
-        
-        // Main function epilogue
-        asm.push_str("\n.main_epilogue:\n");
-        asm.push_str("    ; Function epilogue\n");
-        asm.push_str("    mov rsp, rbp\n");
-        asm.push_str("    pop rbp\n");
-        asm.push_str("    ret\n\n");
-        
-        // Generate helper functions
-        asm.push_str(&self.generate_helper_function());
-        
-        // Generate data section
-        asm.push_str("    section .data\n");
-        asm.push_str("newline:\n");
-        asm.push_str("    db 10, 0\n\n");
-        
-        asm.push_str("; String literals\n");
-        asm.push_str(&self.generate_string_data());
-        
-        Ok(asm)
     }
     
+    // Main function epilogue
+    asm.push_str("\n.main_epilogue:\n");
+    asm.push_str("    mov rsp, rbp\n");
+    asm.push_str("    pop rbp\n");
+    asm.push_str("    ret\n\n");
+    
+    // Generate helper functions
+    asm.push_str(&self.generate_helper_function());
+    
+    // Generate hardware library if DSL is available
+    if let Some(ref dsl) = *self.hardware_dsl.borrow() {
+        asm.push_str("\n; ========== HARDWARE SUPPORT ==========\n");
+        asm.push_str(&dsl.generate_hardware_library());
+    }
+    
+    // Generate data section
+    asm.push_str("    .section .data\n");
+    asm.push_str("newline:\n");
+    asm.push_str("    .byte 10, 0\n\n");
+    
+    asm.push_str("# String literals\n");
+    asm.push_str(&self.generate_string_data());
+    
+    // Add AT&T syntax directive for compatibility
+    asm.push_str("\n    .att_syntax\n");
+    
+    Ok(asm)
+}
+    
     fn compile_expression(&mut self, expr: &Expr) -> Result<String, String> {
-        match expr {
-            Expr::Number(n, _) => {
-                Ok(format!("    ; Number: {}\n    mov rax, {}\n", n, n))
+    match expr {
+        Expr::Number(n, _) => {
+            Ok(format!("    # Number: {}\n    mov rax, {}\n", n, n))
+        }
+        Expr::String(s, _) => {
+            let label = self.get_string_label(s);
+            Ok(format!("    # String: '{}'\n    lea rax, [{}]\n", s, label))
+        }
+        Expr::Var(name, _) => {
+            // Use RBP-relative addressing ONLY
+            if let Some(offset) = self.get_variable_offset_rbp_relative(name) {
+                let abs_offset = self.get_absolute_offset(offset);
+                Ok(format!("    # Variable: {} at [rbp - {}]\n    mov rax, QWORD PTR [rbp - {}]\n", 
+                           name, abs_offset, abs_offset))
+            } else {
+                Err(format!("Undefined variable: {}", name))
             }
-            Expr::String(s, _) => {
-                let label = self.get_string_label(s);
-                Ok(format!("    ; String: '{}'\n    lea rax, [{}]\n", s, label))
-            }
-            Expr::Var(name, _) => {
-                // FIXED: Use RBP-relative addressing ONLY
-                if let Some(offset) = self.get_variable_offset_rbp_relative(name) {
-                    let abs_offset = self.get_absolute_offset(offset);
-                    Ok(format!("    ; Variable: {} at [rbp - {}]\n    mov rax, [rbp - {}]\n", 
-                               name, abs_offset, abs_offset))
-                } else {
-                    Err(format!("Undefined variable: {}", name))
-                }
-            }
-            Expr::Call { func, args, kwargs: _, span: _ } if func == "print" => {
-                let mut code = String::new();
-                
-                for arg in args {
-                    match arg {
-                        Expr::String(s, _) => {
-                            let label = self.get_string_label(s);
-                            code.push_str(&format!("    ; String: '{}'\n", s));
-                            code.push_str(&format!("    lea rdi, [{}]\n", label));
-                            code.push_str("    call print_string\n");
-                            code.push_str("    call print_newline\n");
-                        }
-                        Expr::Number(n, _) => {
-                            code.push_str(&format!("    ; Number: {}\n", n));
-                            code.push_str(&format!("    mov rax, {}\n", n));
+        }
+        Expr::Call { func, args, kwargs: _, span: _ } if func == "print" => {
+            let mut code = String::new();
+            
+            for arg in args {
+                match arg {
+                    Expr::String(s, _) => {
+                        let label = self.get_string_label(s);
+                        code.push_str(&format!("    # String: '{}'\n", s));
+                        code.push_str(&format!("    lea rdi, [{}]\n", label));
+                        code.push_str("    call print_string\n");
+                        code.push_str("    call print_newline\n");
+                    }
+                    Expr::Number(n, _) => {
+                        code.push_str(&format!("    # Number: {}\n", n));
+                        code.push_str(&format!("    mov rax, {}\n", n));
+                        code.push_str("    call print_decimal\n");
+                    }
+                    Expr::Var(name, _) => {
+                        if let Some(offset) = self.get_variable_offset_rbp_relative(name) {
+                            let abs_offset = self.get_absolute_offset(offset);
+                            code.push_str(&format!("    # Variable: {}\n", name));
+                            code.push_str(&format!("    mov rax, QWORD PTR [rbp - {}]\n", abs_offset));
                             code.push_str("    call print_decimal\n");
-                        }
-                        Expr::Var(name, _) => {
-                            if let Some(offset) = self.get_variable_offset_rbp_relative(name) {
-                                let abs_offset = self.get_absolute_offset(offset);
-                                code.push_str(&format!("    ; Variable: {}\n", name));
-                                code.push_str(&format!("    mov rax, [rbp - {}]\n", abs_offset));
-                                code.push_str("    call print_decimal\n");
-                            } else {
-                                return Err(format!("Undefined variable: {}", name));
-                            }
-                        }
-                        _ => {
-                            return Err(format!("Unsupported argument type in print: {:?}", arg));
+                        } else {
+                            return Err(format!("Undefined variable: {}", name));
                         }
                     }
+                    _ => {
+                        return Err(format!("Unsupported argument type in print: {:?}", arg));
+                    }
                 }
-                
-                Ok(code)
             }
-            Expr::Call { func, args, kwargs: _, span: _ } => {
-                // General function call
-                let mut code = String::new();
-                
-                code.push_str(&format!("    ; Function call: {}\n", func));
-                
-                // Process arguments
-                for (i, arg) in args.iter().enumerate() {
-                    let arg_code = self.compile_expression(arg)?;
-                    code.push_str(&arg_code);
-                    
-                    // Move to appropriate register (System V ABI)
-                    match i {
-                        0 => code.push_str("    mov rdi, rax\n"),
-                        1 => code.push_str("    mov rsi, rax\n"),
-                        2 => code.push_str("    mov rdx, rax\n"),
-                        3 => code.push_str("    mov rcx, rax\n"),
-                        4 => code.push_str("    mov r8, rax\n"),
-                        5 => code.push_str("    mov r9, rax\n"),
-                        _ => code.push_str("    push rax\n"),
+            
+            Ok(code)
+        }
+        Expr::Call { func, args, kwargs: _, span: _ } if func.starts_with("hw_") || 
+                                                          func == "write_register" || 
+                                                          func == "read_register" ||
+                                                          func == "dma_transfer" ||
+                                                          func == "port_in" ||
+                                                          func == "port_out" => {
+            // Handle hardware intrinsics
+            let mut code = String::new();
+            code.push_str(&format!("    # Hardware intrinsic: {}\n", func));
+            
+            if let Some(ref mut dsl) = *self.hardware_dsl.borrow_mut() {
+                // Convert arguments to strings for DSL parsing
+                let arg_strings: Vec<String> = args.iter().map(|arg| {
+                    match arg {
+                        Expr::Number(n, _) => n.to_string(),
+                        Expr::String(s, _) => format!("\"{}\"", s),
+                        Expr::Var(name, _) => name.clone(),
+                        _ => "0".to_string(),
                     }
-                }
+                }).collect();
                 
-                // Align stack if needed
-                if args.len() > 6 {
-                    let extra_args = args.len() - 6;
-                    if extra_args % 2 != 0 {
-                        code.push_str("    sub rsp, 8\n");
+                let intrinsic = if !arg_strings.is_empty() {
+                    format!("{}({})", func, arg_strings.join(", "))
+                } else {
+                    func.clone()
+                };
+                
+                match dsl.parse_hardware_statement(&intrinsic) {
+                    Ok(asm_lines) => {
+                        for line in asm_lines {
+                            // Adapt 16/32-bit assembly to 64-bit
+                            let adapted_line = line
+                                .replace("ax", "rax")
+                                .replace("bx", "rbx")
+                                .replace("cx", "rcx")
+                                .replace("dx", "rdx")
+                                .replace("si", "rsi")
+                                .replace("di", "rdi");
+                            code.push_str(&format!("    {}\n", adapted_line));
+                        }
+                        Ok(code)
                     }
+                    Err(e) => Err(format!("Hardware DSL error: {}", e)),
                 }
-                
-                // Call the function
-                code.push_str(&format!("    call {}\n", func));
-                
-                // Clean up stack
-                if args.len() > 6 {
-                    let extra_args = args.len() - 6;
-                    let stack_adjust = extra_args * 8;
-                    if extra_args % 2 != 0 {
-                        code.push_str(&format!("    add rsp, {}\n", stack_adjust + 8));
-                    } else {
-                        code.push_str(&format!("    add rsp, {}\n", stack_adjust));
-                    }
-                }
-                
-                Ok(code)
+            } else {
+                Err("Hardware DSL not available for hardware intrinsic".to_string())
             }
-            Expr::BinOp { left, op, right, span: _ } => {
-                let mut code = String::new();
-                code.push_str("    ; Binary operation\n");
+        }
+        Expr::Call { func, args, kwargs: _, span: _ } => {
+            // General function call
+            let mut code = String::new();
+            
+            code.push_str(&format!("    # Function call: {}\n", func));
+            
+            // Process arguments
+            for (i, arg) in args.iter().enumerate() {
+                let arg_code = self.compile_expression(arg)?;
+                code.push_str(&arg_code);
                 
-                // Compile left operand
-                let left_code = self.compile_expression(left)?;
-                code.push_str(&left_code);
-                code.push_str("    push rax\n");
-                
-                // Compile right operand
-                let right_code = self.compile_expression(right)?;
+                // Move to appropriate register (System V ABI)
+                match i {
+                    0 => code.push_str("    mov rdi, rax\n"),
+                    1 => code.push_str("    mov rsi, rax\n"),
+                    2 => code.push_str("    mov rdx, rax\n"),
+                    3 => code.push_str("    mov rcx, rax\n"),
+                    4 => code.push_str("    mov r8, rax\n"),
+                    5 => code.push_str("    mov r9, rax\n"),
+                    _ => code.push_str("    push rax\n"),
+                }
+            }
+            
+            // Align stack if needed
+            if args.len() > 6 {
+                let extra_args = args.len() - 6;
+                if extra_args % 2 != 0 {
+                    code.push_str("    sub rsp, 8\n");
+                }
+            }
+            
+            // Call the function
+            code.push_str(&format!("    call {}\n", func));
+            
+            // Clean up stack
+            if args.len() > 6 {
+                let extra_args = args.len() - 6;
+                let stack_adjust = extra_args * 8;
+                if extra_args % 2 != 0 {
+                    code.push_str(&format!("    add rsp, {}\n", stack_adjust + 8));
+                } else {
+                    code.push_str(&format!("    add rsp, {}\n", stack_adjust));
+                }
+            }
+            
+            Ok(code)
+        }
+        Expr::BinOp { left, op, right, span: _ } => {
+            let mut code = String::new();
+            code.push_str("    # Binary operation\n");
+            
+            // Compile left operand
+            let left_code = self.compile_expression(left)?;
+            code.push_str(&left_code);
+            code.push_str("    push rax\n");
+            
+            // Compile right operand
+            let right_code = self.compile_expression(right)?;
+            code.push_str(&right_code);
+            code.push_str("    mov rbx, rax\n");
+            code.push_str("    pop rax\n");
+            
+            // Perform operation
+            match op {
+                Op::Add => code.push_str("    add rax, rbx\n"),
+                Op::Sub => code.push_str("    sub rax, rbx\n"),
+                Op::Mul => code.push_str("    imul rax, rbx\n"),
+                Op::Div => {
+                    code.push_str("    xor rdx, rdx\n");
+                    code.push_str("    idiv rbx\n");
+                }
+                Op::Mod => {
+                    code.push_str("    xor rdx, rdx\n");
+                    code.push_str("    div rbx\n");
+                    code.push_str("    mov rax, rdx\n");
+                }
+                Op::BitAnd => code.push_str("    and rax, rbx\n"),
+                Op::BitOr => code.push_str("    or rax, rbx\n"),
+                Op::BitXor => code.push_str("    xor rax, rbx\n"),
+                _ => return Err(format!("Unsupported operator: {:?}", op)),
+            }
+            
+            Ok(code)
+        }
+        Expr::Compare { left, ops, comparators, span: _ } if ops.len() == 1 => {
+            let mut code = String::new();
+            code.push_str("    # Comparison operation\n");
+            
+            // Compile left operand
+            let left_code = self.compile_expression(left)?;
+            code.push_str(&left_code);
+            code.push_str("    push rax\n");
+            
+            if let Some(right_expr) = comparators.get(0) {
+                let right_code = self.compile_expression(right_expr)?;
                 code.push_str(&right_code);
                 code.push_str("    mov rbx, rax\n");
                 code.push_str("    pop rax\n");
                 
-                // Perform operation
-                match op {
-                    Op::Add => code.push_str("    add rax, rbx\n"),
-                    Op::Sub => code.push_str("    sub rax, rbx\n"),
-                    Op::Mul => code.push_str("    imul rax, rbx\n"),
-                    Op::Div => {
-                        code.push_str("    xor rdx, rdx\n");
-                        code.push_str("    idiv rbx\n");
+                code.push_str("    cmp rax, rbx\n");
+                
+                match ops[0] {
+                    CompareOp::Lt => {
+                        code.push_str("    setl al\n");
+                        code.push_str("    movzx rax, al\n");
                     }
-                    Op::Mod => {
-                        code.push_str("    xor rdx, rdx\n");
-                        code.push_str("    div rbx\n");
-                        code.push_str("    mov rax, rdx\n");
+                    CompareOp::Gt => {
+                        code.push_str("    setg al\n");
+                        code.push_str("    movzx rax, al\n");
                     }
-                    Op::BitAnd => code.push_str("    and rax, rbx\n"),
-                    Op::BitOr => code.push_str("    or rax, rbx\n"),
-                    Op::BitXor => code.push_str("    xor rax, rbx\n"),
-                    _ => return Err(format!("Unsupported operator: {:?}", op)),
+                    CompareOp::Eq => {
+                        code.push_str("    sete al\n");
+                        code.push_str("    movzx rax, al\n");
+                    }
+                    CompareOp::Ne => {
+                        code.push_str("    setne al\n");
+                        code.push_str("    movzx rax, al\n");
+                    }
+                    CompareOp::Le => {
+                        code.push_str("    setle al\n");
+                        code.push_str("    movzx rax, al\n");
+                    }
+                    CompareOp::Ge => {
+                        code.push_str("    setge al\n");
+                        code.push_str("    movzx rax, al\n");
+                    }
+                    CompareOp::In | CompareOp::NotIn | CompareOp::Is | CompareOp::IsNot => {
+                        return Err(format!("Comparison operator {:?} not supported", ops[0]));
+                    }
                 }
-                
-                Ok(code)
+            } else {
+                code.push_str("    pop rax\n");
+                return Err("Missing comparator".to_string());
             }
-            Expr::Compare { left, ops, comparators, span: _ } if ops.len() == 1 => {
-                let mut code = String::new();
-                code.push_str("    ; Comparison operation\n");
-                
-                // Compile left operand
-                let left_code = self.compile_expression(left)?;
-                code.push_str(&left_code);
-                code.push_str("    push rax\n");
-                
-                if let Some(right_expr) = comparators.get(0) {
-                    let right_code = self.compile_expression(right_expr)?;
-                    code.push_str(&right_code);
-                    code.push_str("    mov rbx, rax\n");
-                    code.push_str("    pop rax\n");
-                    
-                    code.push_str("    cmp rax, rbx\n");
-                    
-                    match ops[0] {
-                        CompareOp::Lt => {
-                            code.push_str("    setl al\n");
-                            code.push_str("    movzx rax, al\n");
-                        }
-                        CompareOp::Gt => {
-                            code.push_str("    setg al\n");
-                            code.push_str("    movzx rax, al\n");
-                        }
-                        CompareOp::Eq => {
-                            code.push_str("    sete al\n");
-                            code.push_str("    movzx rax, al\n");
-                        }
-                        CompareOp::Ne => {
-                            code.push_str("    setne al\n");
-                            code.push_str("    movzx rax, al\n");
-                        }
-                        CompareOp::Le => {
-                            code.push_str("    setle al\n");
-                            code.push_str("    movzx rax, al\n");
-                        }
-                        CompareOp::Ge => {
-                            code.push_str("    setge al\n");
-                            code.push_str("    movzx rax, al\n");
-                        }
-                        CompareOp::In | CompareOp::NotIn | CompareOp::Is | CompareOp::IsNot => {
-                            return Err(format!("Comparison operator {:?} not supported", ops[0]));
-                        }
-                    }
-                } else {
-                    code.push_str("    pop rax\n");
-                    return Err("Missing comparator".to_string());
-                }
-                
-                Ok(code)
-            }
-            _ => Err(format!("Unsupported expression: {:?}", expr)),
+            
+            Ok(code)
         }
+        _ => Err(format!("Unsupported expression: {:?}", expr)),
     }
+}
     
     fn function_prologue(&self, func: &BackendFunction) -> String {
-        let mut prologue = String::new();
-        prologue.push_str(&format!("{}:\n", func.name));
-        prologue.push_str("    push rbp\n");
-        prologue.push_str("    mov rbp, rsp\n");
-        
-        let stack_size = func.parameters.len() * 8;
-        if stack_size > 0 {
-            prologue.push_str(&format!("    sub rsp, {}\n", stack_size));
-        }
-        
-        prologue
+    let mut prologue = String::new();
+    prologue.push_str(&format!("{}:\n", func.name));
+    prologue.push_str("    push rbp\n");
+    prologue.push_str("    mov rbp, rsp\n");
+    
+    let stack_size = func.parameters.len() * 8;
+    if stack_size > 0 {
+        prologue.push_str(&format!("    sub rsp, {}\n", stack_size));
     }
     
-    fn function_epilogue(&self, _func: &BackendFunction) -> String {
-        let mut epilogue = String::new();
-        epilogue.push_str("    mov rsp, rbp\n");
-        epilogue.push_str("    pop rbp\n");
-        epilogue.push_str("    ret\n");
-        epilogue
-    }
+    prologue
+}
+
+fn function_epilogue(&self, _func: &BackendFunction) -> String {
+    let mut epilogue = String::new();
+    epilogue.push_str("    mov rsp, rbp\n");
+    epilogue.push_str("    pop rbp\n");
+    epilogue.push_str("    ret\n");
+    epilogue
+}
     
     fn as_any(&self) -> &dyn Any {
         self

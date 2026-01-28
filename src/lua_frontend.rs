@@ -1,3 +1,16 @@
+/*
+    Copyright (C) 2026 Emanuel
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+*/
 use mlua::{Lua, Table, Error as LuaError};
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
@@ -82,6 +95,11 @@ pub enum ParseError {
         message: String,
         span: Span,
     },
+    HardwareError {
+        message: String,
+        span: Span,
+        device: Option<String>,
+    },
 }
 
 impl ParseError {
@@ -106,6 +124,14 @@ impl ParseError {
         }
     }
     
+    pub fn hardware_error(message: impl Into<String>, span: Span, device: Option<String>) -> Self {
+        ParseError::HardwareError {
+            message: message.into(),
+            span,
+            device,
+        }
+    }
+    
     pub fn with_help(mut self, help: impl Into<String>) -> Self {
         match &mut self {
             ParseError::SyntaxError { help: h, .. } => *h = Some(help.into()),
@@ -118,6 +144,7 @@ impl ParseError {
         match self {
             ParseError::SyntaxError { span, .. } => Some(*span),
             ParseError::IncludeError { span, .. } => Some(*span),
+            ParseError::HardwareError { span, .. } => Some(*span),
             _ => None,
         }
     }
@@ -132,6 +159,16 @@ impl ParseError {
             }
             ParseError::IncludeError { filename, message, span } => {
                 let mut output = format!("include error at {}: {}: {}\n", span, filename, message);
+                if let Some(context) = self.extract_source_context(source, span) {
+                    output.push_str(&context);
+                }
+                output
+            }
+            ParseError::HardwareError { message, span, device } => {
+                let mut output = format!("hardware error at {}: {}\n", span, message);
+                if let Some(device) = device {
+                    output.push_str(&format!("  Device: {}\n", device));
+                }
                 if let Some(context) = self.extract_source_context(source, span) {
                     output.push_str(&context);
                 }
@@ -218,6 +255,13 @@ impl std::fmt::Display for ParseError {
             ParseError::IncludeError { filename, message, span } => {
                 write!(f, "include error at {} ({}): {}", span, filename, message)
             }
+            ParseError::HardwareError { message, span, device } => {
+                if let Some(device) = device {
+                    write!(f, "hardware error at {} ({}): {}", span, device, message)
+                } else {
+                    write!(f, "hardware error at {}: {}", span, message)
+                }
+            }
         }
     }
 }
@@ -264,6 +308,7 @@ pub enum Expr {
     BoolOp { op: BoolOp, values: Vec<Expr>, span: Span },
     Compare { left: Box<Expr>, ops: Vec<CompareOp>, comparators: Vec<Expr>, span: Span },
     Call { func: String, args: Vec<Expr>, kwargs: HashMap<String, Expr>, span: Span },
+    HardwareCall { device: String, func: String, args: Vec<Expr>, span: Span },
 }
 
 impl Expr {
@@ -280,6 +325,7 @@ impl Expr {
             Expr::BoolOp { span, .. } => *span,
             Expr::Compare { span, .. } => *span,
             Expr::Call { span, .. } => *span,
+            Expr::HardwareCall { span, .. } => *span,
         }
     }
 }
@@ -305,6 +351,7 @@ pub enum Statement {
     Break,
     Continue,
     Include { filename: String, span: Span },
+    HardwareDecl { device: String, config: HashMap<String, Expr>, span: Span },
 }
 
 impl Statement {
@@ -323,6 +370,7 @@ impl Statement {
             Statement::Break => Span::single(Position::new(0, 0, 0)),
             Statement::Continue => Span::single(Position::new(0, 0, 0)),
             Statement::Include { span, .. } => *span,
+            Statement::HardwareDecl { span, .. } => *span,
         }
     }
 }
@@ -331,6 +379,7 @@ impl Statement {
 pub struct Program {
     pub body: Vec<Statement>,
     pub span: Span,
+    pub hardware_devices: HashMap<String, HashMap<String, Expr>>,
 }
 
 pub struct LuaFrontend {
@@ -384,7 +433,13 @@ local keywords = {
     ["include"] = true,
     ["section"] = true,
     ["global"] = true,
-    ["end"] = true
+    ["end"] = true,
+    ["device"] = true,
+    ["hw"] = true,
+    ["gpu"] = true,
+    ["network"] = true,
+    ["storage"] = true,
+    ["sound"] = true,
 }
 
 local operators = {
@@ -901,6 +956,8 @@ function parser.parse(tokens)
                 return parse_while_statement()
             elseif token.value == "def" then
                 return parse_function_def()
+            elseif token.value == "device" then
+                return parse_device_decl()
             elseif token.value == "return" then
                 return parse_return_statement()
             elseif token.value == "pass" then
@@ -919,6 +976,11 @@ function parser.parse(tokens)
             elseif token.value == "global" then
                 return parse_global_statement()
             end
+        end
+        
+        -- Check for hardware function definition
+        if token.type == TokenType.PUNCTUATION and token.value == "@" then
+            return parse_hardware_function_def()
         end
         
         if token.type == TokenType.IDENTIFIER then
@@ -953,6 +1015,77 @@ function parser.parse(tokens)
             name = name,
             type_hint = type_hint,
             value = value
+        }
+    end
+    
+    function parse_device_decl()
+        consume(TokenType.KEYWORD, "device")
+        local device_name = consume(TokenType.IDENTIFIER).value
+        consume(TokenType.OPERATOR, "=")
+        consume(TokenType.PUNCTUATION, "{")
+        
+        local config = {}
+        
+        while not match(TokenType.PUNCTUATION, "}") do
+            local key = consume(TokenType.IDENTIFIER).value
+            consume(TokenType.PUNCTUATION, ":")
+            local value = parse_expression()
+            config[key] = value
+            
+            if not match(TokenType.PUNCTUATION, ",") then
+                break
+            end
+        end
+        
+        consume(TokenType.PUNCTUATION, "}")
+        
+        return {
+            type = "DeviceDecl",
+            device = device_name,
+            config = config
+        }
+    end
+    
+    function parse_hardware_function_def()
+        consume(TokenType.PUNCTUATION, "@")
+        local device_name = consume(TokenType.IDENTIFIER).value
+        consume(TokenType.PUNCTUATION, ".")
+        
+        local def_token = current()
+        if def_token.type == TokenType.KEYWORD and def_token.value == "def" then
+            consume(TokenType.KEYWORD, "def")
+        else
+            error("Expected 'def' after device name")
+        end
+        
+        local name = consume(TokenType.IDENTIFIER).value
+        consume(TokenType.PUNCTUATION, "(")
+        
+        local args = {}
+        if not match(TokenType.PUNCTUATION, ")") then
+            repeat
+                table.insert(args, consume(TokenType.IDENTIFIER).value)
+            until not match(TokenType.PUNCTUATION, ",")
+            consume(TokenType.PUNCTUATION, ")")
+        end
+        
+        consume(TokenType.PUNCTUATION, ":")
+        
+        local body = {}
+        if match(TokenType.PUNCTUATION, "{") then
+            while not match(TokenType.PUNCTUATION, "}") do
+                table.insert(body, parse_statement())
+            end
+        else
+            table.insert(body, parse_statement())
+        end
+        
+        return {
+            type = "HardwareFunctionDef",
+            device = device_name,
+            name = name,
+            args = args,
+            body = body
         }
     end
     
@@ -1339,21 +1472,43 @@ return parser
                 "Call" => {
                     let func: String = expr_table.get("func").map_err(|e| ParseError::lua_error(e.to_string()))?;
                     
-                    let args_table: Table = expr_table.get("args").map_err(|e| ParseError::lua_error(e.to_string()))?;
-                    let args_len: i64 = args_table.len().map_err(|e: LuaError| ParseError::lua_error(e.to_string()))?;
-                    
-                    let mut args = Vec::new();
-                    for i in 1..=args_len {
-                        let arg_table: Table = args_table.get(i).map_err(|e| ParseError::lua_error(e.to_string()))?;
-                        args.push(convert_expr(lua, &arg_table, span)?);
+                    // Check if it's a hardware call
+                    if func.starts_with("hw_") || func == "write_register" || func == "read_register" ||
+                       func == "dma_transfer" || func == "port_in" || func == "port_out" {
+                        // For now, treat as regular call but with hardware flag
+                        let args_table: Table = expr_table.get("args").map_err(|e| ParseError::lua_error(e.to_string()))?;
+                        let args_len: i64 = args_table.len().map_err(|e: LuaError| ParseError::lua_error(e.to_string()))?;
+                        
+                        let mut args = Vec::new();
+                        for i in 1..=args_len {
+                            let arg_table: Table = args_table.get(i).map_err(|e| ParseError::lua_error(e.to_string()))?;
+                            args.push(convert_expr(lua, &arg_table, span)?);
+                        }
+                        
+                        Ok(Expr::Call {
+                            func,
+                            args,
+                            kwargs: HashMap::new(),
+                            span,
+                        })
+                    } else {
+                        // Regular function call
+                        let args_table: Table = expr_table.get("args").map_err(|e| ParseError::lua_error(e.to_string()))?;
+                        let args_len: i64 = args_table.len().map_err(|e: LuaError| ParseError::lua_error(e.to_string()))?;
+                        
+                        let mut args = Vec::new();
+                        for i in 1..=args_len {
+                            let arg_table: Table = args_table.get(i).map_err(|e| ParseError::lua_error(e.to_string()))?;
+                            args.push(convert_expr(lua, &arg_table, span)?);
+                        }
+                        
+                        Ok(Expr::Call {
+                            func,
+                            args,
+                            kwargs: HashMap::new(),
+                            span,
+                        })
                     }
-                    
-                    Ok(Expr::Call {
-                        func,
-                        args,
-                        kwargs: HashMap::new(),
-                        span,
-                    })
                 }
                 _ => Err(ParseError::syntax_error(format!("Unknown expression type: {}", expr_type), span)),
             }
@@ -1374,6 +1529,25 @@ return parser
                         name,
                         value,
                         type_hint,
+                        span,
+                    })
+                }
+                "DeviceDecl" => {
+                    let device: String = stmt_table.get("device").map_err(|e| ParseError::lua_error(e.to_string()))?;
+                    
+                    let config_table: Table = stmt_table.get("config").map_err(|e| ParseError::lua_error(e.to_string()))?;
+                    let config_len: i64 = config_table.len().map_err(|e: LuaError| ParseError::lua_error(e.to_string()))?;
+                    
+                    let mut config = HashMap::new();
+                    for i in 1..=config_len {
+                        let key: String = config_table.get(i).map_err(|e| ParseError::lua_error(e.to_string()))?;
+                        // For now, we'll just store the device name
+                        config.insert(key, Expr::String("".to_string(), span));
+                    }
+                    
+                    Ok(Statement::HardwareDecl {
+                        device,
+                        config,
                         span,
                     })
                 }
@@ -1534,6 +1708,36 @@ return parser
                         span,
                     })
                 }
+                "HardwareFunctionDef" => {
+                    let device: String = stmt_table.get("device").map_err(|e| ParseError::lua_error(e.to_string()))?;
+                    let name: String = stmt_table.get("name").map_err(|e| ParseError::lua_error(e.to_string()))?;
+                    
+                    let args_table: Table = stmt_table.get("args").map_err(|e| ParseError::lua_error(e.to_string()))?;
+                    let args_len: i64 = args_table.len().map_err(|e: LuaError| ParseError::lua_error(e.to_string()))?;
+                    
+                    let mut args = Vec::new();
+                    for i in 1..=args_len {
+                        let arg: String = args_table.get(i).map_err(|e| ParseError::lua_error(e.to_string()))?;
+                        args.push(arg);
+                    }
+                    
+                    let body_table: Table = stmt_table.get("body").map_err(|e| ParseError::lua_error(e.to_string()))?;
+                    let body_len: i64 = body_table.len().map_err(|e: LuaError| ParseError::lua_error(e.to_string()))?;
+                    
+                    let mut body = Vec::new();
+                    for i in 1..=body_len {
+                        let stmt_table: Table = body_table.get(i).map_err(|e| ParseError::lua_error(e.to_string()))?;
+                        body.push(convert_stmt(lua, &stmt_table, span)?);
+                    }
+                    
+                    Ok(Statement::HardwareFunctionDef {
+                        device,
+                        name,
+                        args,
+                        body,
+                        span,
+                    })
+                }
                 "Pass" => Ok(Statement::Pass),
                 "Break" => Ok(Statement::Break),
                 "Continue" => Ok(Statement::Continue),
@@ -1570,6 +1774,7 @@ return parser
         Ok(Program {
             body: statements,
             span: dummy_span,
+            hardware_devices: HashMap::new(),
         })
     }
     
@@ -1599,12 +1804,25 @@ return parser
             Ok(format!("Formatted: {}", template))
         })?;
         
+        // Hardware functions
+        let hw_write_func = lua.create_function(|_, (port, value): (i32, i32)| {
+            println!("[LUA] Hardware write to port {}: {}", port, value);
+            Ok(())
+        })?;
+        
+        let hw_read_func = lua.create_function(|_, port: i32| {
+            println!("[LUA] Hardware read from port: {}", port);
+            Ok(0)
+        })?;
+        
         let globals = lua.globals();
         globals.set("log", log_func)?;
         globals.set("open_file", open_func)?;
         globals.set("read_file", read_func)?;
         globals.set("get_version", version_func)?;
         globals.set("format_string", format_func)?;
+        globals.set("hw_write", hw_write_func)?;
+        globals.set("hw_read", hw_read_func)?;
         
         Ok(())
     }
@@ -1663,6 +1881,7 @@ impl IncludeProcessor {
         Ok(Program {
             body: expanded_statements,
             span: program.span,
+            hardware_devices: program.hardware_devices.clone(),
         })
     }
     
@@ -1740,6 +1959,10 @@ pub fn create_type_mismatch_error(expected: &str, found: &str, span: Span) -> Pa
         format!("Type mismatch: expected {}, found {}", expected, found),
         span
     ).with_help("Check the types of your expression")
+}
+
+pub fn create_hardware_error(message: &str, device: Option<&str>, span: Span) -> ParseError {
+    ParseError::hardware_error(message, span, device.map(|s| s.to_string()))
 }
 
 pub fn format_parse_errors(errors: &[ParseError], source: &str) -> String {

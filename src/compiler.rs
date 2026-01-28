@@ -1,4 +1,16 @@
-// dont mind the warnings, im too lazy to remove them, its working, dont mess with something thats already working
+/*
+    Copyright (C) 2026 Emanuel
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+*/
 use std::collections::HashMap;
 use std::path::PathBuf;
 use crate::parser::{Program, Statement, Expr};
@@ -106,10 +118,17 @@ pub trait OptimizationPass {
 
 impl EarthangCompiler {
     pub fn new(config: CompilerConfig) -> Self {
+        let hardware_dsl_enabled = config.hardware_dsl_enabled;
+        let hardware_dsl = if hardware_dsl_enabled {
+            Some(crate::dsl::init_hardware_dsl())
+        } else {
+            None
+        };
+
         let mut compiler = Self {
             config,
             backend_registry: BackendRegistry::default_registry(),
-            hardware_dsl: None,
+            hardware_dsl,
             warnings: Vec::new(),
             errors: Vec::new(),
             symbol_table: HashMap::new(),
@@ -117,10 +136,6 @@ impl EarthangCompiler {
             optimization_passes: Vec::new(),
             extension_registry: ExtensionRegistry::new(),
         };
-        
-        if compiler.config.hardware_dsl_enabled {
-            compiler.hardware_dsl = Some(crate::dsl::init_hardware_dsl());
-        }
         
         compiler.register_optimization_passes();
         compiler.register_builtin_extensions();
@@ -211,14 +226,9 @@ impl EarthangCompiler {
     fn compile_with_extensions(&mut self, program: &Program) -> Result<String, String> {
         let mut emitter = NasmEmitter::new();
         
-        match self.config.target {
-            Target::Linux64 => emitter.set_target_linux(),
-            Target::Bios16 => emitter.set_target_bios16(),
-            Target::Bios32 => emitter.set_target_bios32(),
-            Target::Bios64 => emitter.set_target_bios64(),
-            Target::Bios64Sse => emitter.set_target_bios64_sse(),
-            Target::Bios64Avx => emitter.set_target_bios64_avx(),
-            Target::Bios64Avx512 => emitter.set_target_bios64_avx512(),
+        // Since we only have Linux64 target, use if let
+        if let Target::Linux64 = self.config.target {
+            emitter.set_target_linux();
         }
         
         let mut asm = emitter.compile_program(program)?;
@@ -229,7 +239,7 @@ impl EarthangCompiler {
     }
     
     pub fn compile<P: AsRef<std::path::Path>>(&mut self, file_path: P) -> Result<CompilationResult, String> {
-        let start_time = std::time::Instant::now();
+        let _start_time = std::time::Instant::now();
         
         self.warnings.clear();
         self.errors.clear();
@@ -277,58 +287,21 @@ impl EarthangCompiler {
             }
         }
         
-        let hardware_asm = if self.config.hardware_dsl_enabled {
-            let mut dsl = self.hardware_dsl.take();
-            if let Some(ref mut dsl_ref) = dsl {
-                let result = self.collect_hardware_intrinsics(&program, dsl_ref);
-                self.hardware_dsl = dsl;
-                result?
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
+        // Create backend with hardware DSL if enabled
+        let _backend_module = self.create_backend_module(&program);
         
-        let backend_module = self.create_backend_module(&program, hardware_asm);
-        let target = self.config.target;
-        let use_backend_registry = matches!(
-            target,
-            Target::Bios16 | Target::Bios32 | Target::Bios64 | 
-            Target::Bios64Sse | Target::Bios64Avx | Target::Bios64Avx512
-        );
-        
-        let has_extensions = self.statement_has_extension_call(&Statement::Expr(
-            Expr::Var("dummy".to_string(), crate::parser::Span::single(crate::parser::Position::new(0, 0, 0)))
-        ));
-        
-        let assembly_result = if has_extensions {
-            self.compile_with_extensions(&program)
-        } else if use_backend_registry {
-            let backend_found = self.backend_registry.find_backend(&backend_module);
-            
-            match backend_found {
-                Some(_backend) => {
-                    let module_clone = backend_module.clone();
-                    self.compile_with_backend(&program, &module_clone)
+        let assembly_result = match self.config.target {
+            Target::Linux64 => {
+                let mut backend = crate::backend::Linux64Backend::new();
+                
+                // Pass hardware DSL to backend if enabled
+                if self.config.hardware_dsl_enabled {
+                    if let Some(dsl) = self.hardware_dsl.take() {
+                        backend = backend.with_hardware_dsl(dsl);
+                    }
                 }
-                None => {
-                    let caps = backend_module.required_capabilities.iter()
-                        .map(|c| format!("{:?}", c))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    return Err(format!("No backend found that supports all required capabilities: {}", caps));
-                }
-            }
-        } else {
-            match self.config.target {
-                Target::Linux64 => {
-                    let mut backend = crate::backend::Linux64Backend::new();
-                    backend.compile_program(&program)
-                }
-                _ => {
-                    self.compile_with_emitter(&program)
-                }
+                
+                backend.compile_program(&program)
             }
         };
         
@@ -343,7 +316,9 @@ impl EarthangCompiler {
             functions_compiled: program.body.iter()
                 .filter(|stmt| matches!(stmt, Statement::FunctionDef { .. }))
                 .count(),
-            hardware_intrinsics: 0,
+            hardware_intrinsics: program.body.iter()
+                .filter(|stmt| matches!(stmt, Statement::HardwareFunctionDef { .. }))
+                .count(),
             compilation_time_ms: compilation_time,
         };
         
@@ -358,14 +333,9 @@ impl EarthangCompiler {
     fn compile_with_emitter(&mut self, program: &Program) -> Result<String, String> {
         let mut emitter = NasmEmitter::new();
         
-        match self.config.target {
-            Target::Linux64 => emitter.set_target_linux(),
-            Target::Bios16 => emitter.set_target_bios16(),
-            Target::Bios32 => emitter.set_target_bios32(),
-            Target::Bios64 => emitter.set_target_bios64(),
-            Target::Bios64Sse => emitter.set_target_bios64_sse(),
-            Target::Bios64Avx => emitter.set_target_bios64_avx(),
-            Target::Bios64Avx512 => emitter.set_target_bios64_avx512(),
+        // Since we only have Linux64 target, use if let
+        if let Target::Linux64 = self.config.target {
+            emitter.set_target_linux();
         }
         
         emitter.compile_program(program)
@@ -377,73 +347,34 @@ impl EarthangCompiler {
         _module: &BackendModule
     ) -> Result<String, String> {
         match self.config.target {
-            Target::Bios16 => {
-                let mut bios16_backend = crate::backend::Bios16Backend::new();
-                bios16_backend.compile_program(program)
-            }
-            Target::Bios32 => {
-                let mut bios32_backend = crate::backend::Bios32Backend::new();
-                bios32_backend.compile_program(program)
-            }
-            Target::Bios64 | Target::Bios64Sse | Target::Bios64Avx | Target::Bios64Avx512 => {
-                let mut backend_mut = crate::backend::Bios64Backend::new();
+            Target::Linux64 => {
+                let mut backend = crate::backend::Linux64Backend::new();
                 
-                backend_mut = match self.config.target {
-                    Target::Bios64Sse => backend_mut.with_sse(),
-                    Target::Bios64Avx => backend_mut.with_avx(),
-                    Target::Bios64Avx512 => backend_mut.with_avx512(),
-                    _ => backend_mut,
-                };
+                // Pass hardware DSL to backend if enabled
+                if self.config.hardware_dsl_enabled {
+                    if let Some(dsl) = self.hardware_dsl.take() {
+                        backend = backend.with_hardware_dsl(dsl);
+                    }
+                }
                 
-                backend_mut.compile_program(program)
-            }
-            _ => {
-                let mut backend_copy: Box<dyn Backend> = match self.config.target {
-                    Target::Linux64 => Box::new(crate::backend::Linux64Backend::new()),
-                    _ => return Err(format!("Unsupported target for backend compilation: {:?}", self.config.target)),
-                };
-                
-                backend_copy.compile_program(program)
+                backend.compile_program(program)
             }
         }
     }
     
-    fn create_backend_module(&self, _program: &Program, _hardware_asm: Vec<String>) -> BackendModule {
+    fn create_backend_module(&self, _program: &Program) -> BackendModule {
         let mut required_capabilities = Vec::new();
         
         match self.config.target {
-            Target::Bios16 => {
-                required_capabilities.push(Capability::BIOS);
-                required_capabilities.push(Capability::RealMode16);
-                required_capabilities.push(Capability::PureMetal);
-            }
-            Target::Bios32 => {
-                required_capabilities.push(Capability::BIOS);
-                required_capabilities.push(Capability::ProtectedMode32);
-                required_capabilities.push(Capability::PureMetal);
-                required_capabilities.push(Capability::Paging);
-            }
-            Target::Bios64 | Target::Bios64Sse | Target::Bios64Avx | Target::Bios64Avx512 => {
-                required_capabilities.push(Capability::BIOS);
-                required_capabilities.push(Capability::LongMode64);
-                required_capabilities.push(Capability::PureMetal);
-                required_capabilities.push(Capability::Paging);
-                
-                if matches!(self.config.target, Target::Bios64Sse) {
-                    required_capabilities.push(Capability::SSE);
-                    required_capabilities.push(Capability::SSE2);
-                }
-                if matches!(self.config.target, Target::Bios64Avx) {
-                    required_capabilities.push(Capability::AVX);
-                }
-                if matches!(self.config.target, Target::Bios64Avx512) {
-                    required_capabilities.push(Capability::AVX512);
-                }
-            }
             Target::Linux64 => {
                 required_capabilities.push(Capability::Linux);
                 required_capabilities.push(Capability::LongMode64);
                 required_capabilities.push(Capability::VirtualMemory);
+                
+                // Add hardware capabilities if DSL is enabled
+                if self.config.hardware_dsl_enabled {
+                    required_capabilities.push(Capability::Graphics);
+                }
             }
         }
         
@@ -715,6 +646,7 @@ pub fn format_result(result: &CompilationResult) -> String {
     output.push_str(&format!("  Assembly lines: {}\n", result.stats.assembly_lines));
     output.push_str(&format!("  Variables allocated: {}\n", result.stats.variables_allocated));
     output.push_str(&format!("  Functions compiled: {}\n", result.stats.functions_compiled));
+    output.push_str(&format!("  Hardware intrinsics: {}\n", result.stats.hardware_intrinsics));
     output.push_str(&format!("  Compilation time: {}ms\n", result.stats.compilation_time_ms));
     
     output

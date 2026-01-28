@@ -2,25 +2,18 @@
 name = "earthang"
 version = "0.4.2-a"
 description = "Earthang Language"
-authors = ["BIt Jumper Studio"]
-license = "MIT"
+authors = ["Emanuel"]
+license = "GPL-3.0"
 repository = "https://github.com/Bit-Jumper-Studio/Earthang"
 readme = "README.md"
-keywords = ["compiler", "bootloader", "assembly", "bios", "uefi", "low-level"]
+keywords = ["compiler", "bootloader", "assembly", "low-level"]
 categories = ["command-line-utilities", "development-tools", "systems-programming"]
 edition = "2021"
 
 [dependencies]
 clap = { version = "4.0", features = ["derive"] }
 colored = "2.0"
-mlua = { version = "0.11.5", features = ["lua54", "vendored", "async"] }
+mlua = { version = "0.11.5", features = ["lua54", "vendored"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = "0.4"
-
-[features]
-default = ["bios"]
-bios = []
-sse = []
-avx = []
-avx512 = []
